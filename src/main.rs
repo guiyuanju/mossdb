@@ -1,8 +1,10 @@
 use std::collections::HashMap;
-use std::fs::{File, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, Write};
+use std::path::{Path, PathBuf};
 
 // DONE: single log: append, delete(tombstone), get, dump
+// TODO: store byte stream instead of string, let upper layer handle type store and retreival
 // TODO: multiple log: comnpression, merge
 
 #[cfg(test)]
@@ -11,7 +13,7 @@ mod tests {
 
     #[test]
     fn test_main() -> io::Result<()> {
-        let mut log = Log::new("log")?;
+        let mut log = Log::new(Path::new("log"))?;
 
         let data = vec![
             ("Bob",  "age: 23, gender: male"),
@@ -48,34 +50,50 @@ fn main() -> io::Result<()> {
 }
 
 pub struct Engine {
-    map: HashMap<String, MapEntry>,
-    log: Log,
+    maps: Vec<HashMap<String, MapEntry>>,
+    logs: Vec<Log>,
 }
 
 impl Engine {
-    pub fn new(name: &str) -> io::Result<Self> {
+    pub fn new(logs_dir: &str) -> io::Result<Self> {
+        let mut logs = vec![];
+        let mut maps = vec![];
+
+        for entry in fs::read_dir(logs_dir)? {
+            let path = entry?.path();
+            if path.is_file() && path.ends_with(".log") {
+                logs.push(Log::new(&path)?);
+                maps.push(HashMap::new());
+            }
+        }
+
+        logs.sort_by(|a, b| a.name.to_string_lossy().cmp(&b.name.to_string_lossy()));
+
         let mut engine = Engine {
-            map: HashMap::new(),
-            log: Log::new(name)?,
+            maps, logs,
         };
+
         engine.rebuild()?;
+
         return Ok(engine);
     }
 
     fn rebuild(&mut self) -> io::Result<()> {
         let mut count = 0;
-        for log_entry in self.log.iter()? {
-            let key = log_entry.key.value;
-            let value = log_entry.value;
-            // deleted entry
-            if value.value.len() == 0 {
-                self.map.remove(&key);
-            } else {
-                self.map.insert(key, MapEntry::new(value.offset, value.len));
+        for (i, log) in self.logs.iter_mut().enumerate() {
+            for entry in log.iter()? {
+                let key = entry.key.value;
+                let value = entry.value;
+                // deleted entry
+                if value.value.len() == 0 {
+                    self.maps[i].remove(&key);
+                } else {
+                    self.maps[i].insert(key, MapEntry::new(value.offset, value.len));
+                }
+                count += 1;
             }
-            count += 1;
         }
-        println!("processed {} entries, {} index rebuilt", count, self.map.len());
+        println!("processed {} entries, {} index rebuilt", count, self.maps.iter().map(|e| e.len()).sum::<usize>());
         Ok(())
     }
 
@@ -124,7 +142,11 @@ impl Repl {
             "set" => engine.set(args[0], args[1])?,
             "get" => println!("{}", engine.get(args[0])?),
             "del" => engine.del(args[0])?,
-            "dump" => engine.log.dump()?,
+            "dump" => {
+                for log in &mut engine.logs {
+                    log.dump()?;
+                }
+            }
             _ => {}
         }
 
@@ -183,12 +205,12 @@ impl MapEntry {
 }
 
 struct Log {
-    name: String,
+    name: PathBuf,
     handler: File,
 }
 
 impl Log {
-    fn new(name: &str) -> io::Result<Self> {
+    fn new(name: &Path) -> io::Result<Self> {
         let file = OpenOptions::new()
             .create(true)
             .append(true)
