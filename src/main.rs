@@ -4,8 +4,11 @@ use std::io::{self, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 
 // DONE: single log: append, delete(tombstone), get, dump
-// TODO: store byte stream instead of string, let upper layer handle type store and retreival
+// DONE: store byte stream instead of string, let upper layer handle type store and retreival
 // TODO: multiple log: comnpression, merge
+// TODO: OS-like cache with LRU eviction, trade db space for performance, like in-memory cache db
+// but with good durability
+// TODO: support distribution
 
 #[cfg(test)]
 mod tests {
@@ -15,17 +18,17 @@ mod tests {
     fn test_main() -> io::Result<()> {
         let mut log = Log::new(Path::new("log"))?;
 
-        let data = vec![
-            ("Bob",  "age: 23, gender: male"),
-            ("Alice", "age: 18, gender: female"),
+        let data: Vec<(Vec<u8>, Vec<u8>)> = vec![
+            ("Bob".as_bytes().to_vec(),  "age: 23, gender: male".as_bytes().to_vec()),
+            ("Alice".as_bytes().to_vec(), "age: 18, gender: female".as_bytes().to_vec()),
         ];
 
-        let mut map: HashMap<String, MapEntry> = HashMap::new();
+        let mut map: HashMap<Vec<u8>, Location> = HashMap::new();
         for d in data {
             println!("storing {:?}", d.0);
             map.insert(
-                d.0.to_string(),
-                MapEntry::new(log.append(d.0, d.1)?, d.1.as_bytes().len())
+                d.0.clone(),
+                Location::new(log.append(&d.0, &d.1)?, d.1.len())
             );
         }
 
@@ -50,7 +53,7 @@ fn main() -> io::Result<()> {
 }
 
 pub struct Engine {
-    maps: Vec<HashMap<String, MapEntry>>,
+    maps: Vec<HashMap<Vec<u8>, Location>>,
     logs: Vec<Log>,
 }
 
@@ -88,7 +91,7 @@ impl Engine {
                 if value.value.len() == 0 {
                     self.maps[i].remove(&key);
                 } else {
-                    self.maps[i].insert(key, MapEntry::new(value.offset, value.len));
+                    self.maps[i].insert(key, Location::new(value.offset, value.len));
                 }
                 count += 1;
             }
@@ -99,7 +102,7 @@ impl Engine {
 
     pub fn set(&mut self, key: &str, value: &str) -> io::Result<()> {
         let offset = self.log.append(key, value)?;
-        self.map.insert(key.to_string(), MapEntry::new(offset, value.as_bytes().len()));
+        self.map.insert(key.to_string(), Location::new(offset, value.as_bytes().len()));
         Ok(())
     }
 
@@ -193,12 +196,12 @@ impl Repl {
     }
 }
 
-struct MapEntry {
+struct Location {
     offset: u64,
     len: usize,
 }
 
-impl MapEntry {
+impl Location {
     fn new(offset: u64, len: usize) -> Self {
         Self {offset, len}
     }
@@ -223,25 +226,24 @@ impl Log {
         })
     }
 
-    pub fn append(&mut self, key: &str, value: &str) -> io::Result<u64> {
-        let key_len = (key.as_bytes().len() as u64).to_be_bytes();
+    pub fn append(&mut self, key: &[u8], value: &[u8]) -> io::Result<u64> {
+        let key_len = (key.len() as u64).to_be_bytes();
         self.handler.write_all(&key_len)?;
-        self.handler.write_all(key.as_bytes())?;
+        self.handler.write_all(key)?;
 
-        let value_len = (value.as_bytes().len() as u64).to_be_bytes();
+        let value_len = (value.len() as u64).to_be_bytes();
         self.handler.write_all(&value_len)?;
         let position = self.handler.stream_position()?;
-        self.handler.write_all(value.as_bytes())?;
+        self.handler.write_all(value)?;
 
         Ok(position)
     }
 
-    pub fn read(&mut self, offset: u64, len: usize) -> io::Result<String> {
+    pub fn read(&mut self, offset: u64, len: usize) -> io::Result<Vec<u8>> {
         self.handler.seek(io::SeekFrom::Start(offset))?;
         let mut buf = vec![0; len];
         self.handler.read_exact(&mut buf)?;
-        return String::from_utf8(buf)
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "failed to read data as UTF-8"));
+        return Ok(buf);
         
     }
 
@@ -258,7 +260,7 @@ impl Log {
 
     pub fn dump(&mut self) -> io::Result<()> {
         for log_entry in self.iter()? {
-            println!("{}: {}", log_entry.key.value, log_entry.value.value);
+            println!("{:?}: {:?}", log_entry.key.value, log_entry.value.value);
         }
 
         Ok(())
@@ -269,7 +271,7 @@ impl Log {
 struct Point {
     offset: u64,
     len: usize,
-    value: String,
+    value: Vec<u8>,
 }
 
 #[derive(Default)]
@@ -298,19 +300,17 @@ impl Iterator for LogIterator {
         let len = u64::from_log_len_bytes(&data[i..i+8]).unwrap() as usize;
         i += 8;
 
-        let key = String::from_utf8_lossy(&data[i..i+len]);
         entry.key.offset = i as u64;
         entry.key.len = len;
-        entry.key.value = key.to_string();
+        entry.key.value = data[i..i+len].to_vec();
         i += len;
 
         let len = u64::from_log_len_bytes(&data[i..i+8]).unwrap() as usize;
         i += 8;
 
-        let value = String::from_utf8_lossy(&data[i..i+len]);
         entry.value.offset = i as u64;
         entry.value.len = len;
-        entry.value.value = value.to_string();
+        entry.value.value = data[i..i+len].to_vec();
         i += len;
 
         self.index = i;
