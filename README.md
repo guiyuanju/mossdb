@@ -1,3 +1,2 @@
-<img width="320" height="320" alt="mossdb" src="https://github.com/user-attachments/assets/4c52338d-d476-459d-914c-91e8646f8c22" />
-
+<img width="320" height="320" alt="mossdb" src="https://github.com/user-attachments/assets/fd2af087-5356-40e4-8a05-4f1a8d151194" />
 # MossDB
