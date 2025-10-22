@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, Write};
+use std::os::macos::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 // DONE: single log: append, delete(tombstone), get, dump
@@ -55,14 +56,18 @@ fn main() -> io::Result<()> {
 pub struct Engine {
     maps: Vec<HashMap<Vec<u8>, Location>>,
     logs: Vec<Log>,
+    log_limit_bytes: u64,
+    logs_dir: PathBuf,
 }
 
 impl Engine {
     pub fn new(logs_dir: &str) -> io::Result<Self> {
         let mut logs = vec![];
         let mut maps = vec![];
+        let mut path = PathBuf::new();
+        path.push(logs_dir);
 
-        for entry in fs::read_dir(logs_dir)? {
+        for entry in fs::read_dir(&path)? {
             let path = entry?.path();
             if path.is_file() && path.ends_with(".log") {
                 logs.push(Log::new(&path)?);
@@ -74,11 +79,42 @@ impl Engine {
 
         let mut engine = Engine {
             maps, logs,
+            log_limit_bytes: 20,
+            logs_dir: path,
         };
 
         engine.rebuild()?;
 
+        if engine.logs.len() == 0 {
+            engine.grow()?;
+        }
+
         return Ok(engine);
+    }
+
+    fn new_log(dir: &PathBuf, name: &str) -> io::Result<Log> {
+        let mut path = PathBuf::new();
+        path.push(dir);
+        path.push(name.to_string() + ".log");
+        OpenOptions::new().create_new(true).open(&path).map_err(|_| io::Error::new(io::ErrorKind::Other, "cannot create log"))?;
+        Ok(Log::new(&path)?)
+    }
+
+    fn new_log_mono_increase(dir: &PathBuf, latest_log: Option<&Log>) -> io::Result<Log> {
+        match latest_log {
+            None => Self::new_log(dir, "0"),
+            Some(lasted) => {
+                let name = lasted.name.file_name().unwrap().to_str().unwrap().to_string();
+                let num: u64 = name.parse().unwrap();
+                Self::new_log(dir, &(num+1).to_string())
+            }
+        }
+    }
+
+    pub fn grow(&mut self) -> io::Result<()> {
+        self.logs.push(Self::new_log_mono_increase(&self.logs_dir, self.logs.last())?);
+        self.maps.push(HashMap::new());
+        Ok(())
     }
 
     fn rebuild(&mut self) -> io::Result<()> {
@@ -100,25 +136,29 @@ impl Engine {
         Ok(())
     }
 
-    pub fn set(&mut self, key: &str, value: &str) -> io::Result<()> {
-        let offset = self.log.append(key, value)?;
-        self.map.insert(key.to_string(), Location::new(offset, value.as_bytes().len()));
+    pub fn set(&mut self, key: &[u8], value: &[u8]) -> io::Result<()> {
+        if self.logs.last_mut().unwrap().size()? >= self.log_limit_bytes {
+            self.grow()?;
+        }
+
+        let offset = self.logs.last_mut().unwrap().append(key, value)?;
+        self.maps.last_mut().unwrap().insert(key.to_vec(), Location::new(offset, value.len()));
         Ok(())
     }
 
-    pub fn get(&mut self, key: &str) -> io::Result<String> {
-        match self.map.get(key) {
+    pub fn get(&mut self, key: &[u8]) -> io::Result<Vec<u8>> {
+        match self.maps.last_mut().unwrap().get(key) {
             None => Err(io::Error::new(io::ErrorKind::Other, "key doesn't exist in map")),
-            Some(entry) => self.log.read(entry.offset, entry.len),
+            Some(entry) => self.logs.last_mut().unwrap().read(entry.offset, entry.len),
         }
     }
 
-    pub fn del(&mut self, key: &str) -> io::Result<()> {
-        match self.map.get(key) {
+    pub fn del(&mut self, key: &[u8]) -> io::Result<()> {
+        match self.maps.last().unwrap().get(key) {
             None => {}
             Some(_) => {
-                self.log.append(key, "")?;
-                self.map.remove(key);
+                self.logs.last_mut().unwrap().append(key, "".as_bytes())?;
+                self.maps.last_mut().unwrap().remove(key);
             }
         }
         Ok(())
@@ -142,9 +182,9 @@ impl Repl {
     fn process_cmd(&mut self, cmd: &str, args: &[&str]) -> io::Result<()> {
         let engine = self.engine.as_mut().unwrap();
         match cmd {
-            "set" => engine.set(args[0], args[1])?,
-            "get" => println!("{}", engine.get(args[0])?),
-            "del" => engine.del(args[0])?,
+            "set" => engine.set(args[0].as_bytes(), args[1].as_bytes())?,
+            "get" => println!("{}", String::from_utf8_lossy(&engine.get(args[0].as_bytes())?)),
+            "del" => engine.del(args[0].as_bytes())?,
             "dump" => {
                 for log in &mut engine.logs {
                     log.dump()?;
@@ -160,7 +200,7 @@ impl Repl {
         match line[0] {
             "open" => {
                 if self.open(line[1]).is_err() {
-                    println!("failed to open file");
+                    println!("failed to open logs");
                     return;
                 }
             }
@@ -224,6 +264,10 @@ impl Log {
             name: name.to_owned(),
             handler: file,
         })
+    }
+
+    pub fn size(&mut self) -> io::Result<u64> {
+        Ok(self.handler.metadata()?.len())
     }
 
     pub fn append(&mut self, key: &[u8], value: &[u8]) -> io::Result<u64> {
