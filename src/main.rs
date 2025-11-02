@@ -68,7 +68,6 @@ fn main() -> io::Result<()> {
 const LOG_SIZE_LIMIT: u64 = 20;
 
 pub struct Engine {
-    // maps: Vec<HashMap<Vec<u8>, Location>>,
     maps: Vec<Map>,
     logs: Vec<Log>,
     log_limit_bytes: u64,
@@ -154,17 +153,7 @@ impl Engine {
     fn rebuild(&mut self) -> io::Result<()> {
         let mut count = 0;
         for (i, log) in self.logs.iter_mut().enumerate() {
-            for entry in log.iter()? {
-                let key = entry.key.value;
-                let value = entry.value;
-                // deleted entry
-                if value.value.len() == 0 {
-                    self.maps[i].remove(&key);
-                } else {
-                    self.maps[i].insert(key, Location::new(value.offset, value.len));
-                }
-                count += 1;
-            }
+            count += self.maps[i].load_from_log(log)?;
         }
         println!(
             "processed {} entries, {} index rebuilt",
@@ -312,6 +301,24 @@ impl Map {
 
     fn len(&self) -> usize {
         self.inner.len()
+    }
+
+    // load entry from a log file, can be called multiple times, same key is overwritten
+    fn load_from_log(&mut self, log: &mut Log) -> io::Result<u64> {
+        let mut count: u64 = 0;
+        for entry in log.iter()? {
+            let key = entry.key.value;
+            let value = entry.value;
+            // deleted entry
+            if value.value.len() == 0 {
+                self.remove(&key);
+            } else {
+                self.insert(key, Location::new(value.offset, value.len));
+            }
+            count += 1;
+        }
+
+        Ok(count)
     }
 }
 
