@@ -1,18 +1,9 @@
+use log::{error, info, warn};
 use std::collections::HashMap;
 use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, Write};
 use std::path::{Path, PathBuf};
-
-// DONE: single log: append, delete(tombstone), get, dump
-// DONE: store byte stream instead of string, let upper layer handle type store and retreival
-// TODO: multiple log
-//  - [x] get, set
-//  - [ ] merge
-//  - [ ] comnpression
-// TODO: OS-like cache with LRU eviction, trade db space for performance, like in-memory cache db
-// but with good durability
-// TODO: support distribution
 
 #[cfg(test)]
 mod tests {
@@ -56,6 +47,8 @@ mod tests {
 }
 
 fn main() -> io::Result<()> {
+    env_logger::init();
+
     if let Ok(cwd) = env::current_dir() {
         println!("CWD = {}", cwd.as_path().to_str().unwrap());
     }
@@ -65,8 +58,9 @@ fn main() -> io::Result<()> {
     Ok(())
 }
 
-const LOG_SIZE_LIMIT: u64 = 20;
+const LOG_SIZE_LIMIT: u64 = 36; // (8+1 + 8+1)*2: 2 kv pair
 
+#[derive(Debug)]
 pub struct Engine {
     maps: Vec<Map>,
     logs: Vec<Log>,
@@ -125,10 +119,10 @@ impl Engine {
     fn new_log_mono_increase(dir: &PathBuf, latest_log: Option<&Log>) -> io::Result<Log> {
         match latest_log {
             None => Self::new_log(dir, "0"),
-            Some(lasted) => {
-                let name = lasted
+            Some(latest) => {
+                let name = latest
                     .name
-                    .file_name()
+                    .file_stem()
                     .unwrap()
                     .to_str()
                     .unwrap()
@@ -169,6 +163,26 @@ impl Engine {
             self.grow()?;
         }
 
+        if self.logs.len() > 2 {
+            let merged_log_name = Path::new("log.merging");
+            let to_merge1 = self.logs[0].name.clone();
+            let to_merge2 = self.logs[1].name.clone();
+            // merge
+            let mut merger =
+                LogMerger::new(vec![to_merge1.clone(), to_merge2.clone()], merged_log_name)?;
+            merger.merge()?;
+            // update with minimum move in vector, ensure close file before delete and move
+            // expect: both old logs are deleted; merged_lod is renamed; in memory map and log are
+            // updated
+            self.logs.remove(0); // remove and close the first log handler
+            fs::remove_file(&to_merge1)?; // delete the first log file
+            self.maps.splice(0..2, std::iter::once(merger.merged_map)); // update map for both logs
+            drop(merger.merged_log); // close the merged log file
+            fs::rename(merged_log_name, &to_merge1)?; // rename merged log to first log
+            self.logs[0] = Log::new(&to_merge1)?; // replace the second log with merged log
+            fs::remove_file(to_merge2)?; // delete the left second log file
+        }
+
         let offset = self.logs.last_mut().unwrap().append(key, value)?;
         self.maps
             .last_mut()
@@ -179,23 +193,29 @@ impl Engine {
 
     // get value, check hash to find offset in log
     pub fn get(&mut self, key: &[u8]) -> io::Result<Vec<u8>> {
-        match self.maps.last_mut().unwrap().get(key) {
-            None => Err(io::Error::new(
-                io::ErrorKind::Other,
-                "key doesn't exist in map",
-            )),
-            Some(entry) => self.logs.last_mut().unwrap().read(entry.offset, entry.len),
+        let err_key_no_exist = Err(io::Error::new(
+            io::ErrorKind::Other,
+            "key doesn't exist in map",
+        ));
+        for (i, m) in self.maps.iter_mut().enumerate().rev() {
+            if let Some(loc) = m.get(key) {
+                if loc.is_tombstone() {
+                    return err_key_no_exist;
+                }
+                return self.logs[i].read(loc.offset, loc.len);
+            }
         }
+        return err_key_no_exist;
     }
 
     // delete key, the tombstone value is an empty byte array
     pub fn del(&mut self, key: &[u8]) -> io::Result<()> {
-        match self.maps.last().unwrap().get(key) {
-            None => {}
-            Some(_) => {
-                self.logs.last_mut().unwrap().append(key, "".as_bytes())?;
-                self.maps.last_mut().unwrap().remove(key);
-            }
+        if let Ok(_) = self.get(key) {
+            self.logs.last_mut().unwrap().append(key, "".as_bytes())?;
+            self.maps
+                .last_mut()
+                .unwrap()
+                .insert(key.to_owned(), Location::tombstone());
         }
         Ok(())
     }
@@ -226,6 +246,7 @@ impl Repl {
             "del" => engine.del(args[0].as_bytes())?,
             "dump" => {
                 for log in &mut engine.logs {
+                    println!("{:?}:", log.name);
                     log.dump()?;
                 }
             }
@@ -276,6 +297,7 @@ impl Repl {
     }
 }
 
+#[derive(Debug)]
 struct Map {
     inner: HashMap<Vec<u8>, Location>,
 }
@@ -309,12 +331,7 @@ impl Map {
         for entry in log.iter()? {
             let key = entry.key.value;
             let value = entry.value;
-            // deleted entry
-            if value.value.len() == 0 {
-                self.remove(&key);
-            } else {
-                self.insert(key, Location::new(value.offset, value.len));
-            }
+            self.insert(key, Location::new(value.offset, value.len));
             count += 1;
         }
 
@@ -322,6 +339,7 @@ impl Map {
     }
 }
 
+#[derive(Debug)]
 struct Location {
     offset: u64,
     len: usize,
@@ -331,8 +349,17 @@ impl Location {
     fn new(offset: u64, len: usize) -> Self {
         Self { offset, len }
     }
+
+    fn tombstone() -> Self {
+        Self { offset: 0, len: 0 }
+    }
+
+    fn is_tombstone(&self) -> bool {
+        self.len == 0
+    }
 }
 
+#[derive(Debug)]
 struct Log {
     name: PathBuf,
     handler: File,
@@ -356,6 +383,14 @@ impl Log {
         Ok(self.handler.metadata()?.len())
     }
 
+    pub fn rename(from: Log, to: &Path) -> io::Result<Log> {
+        // close file before rename for cross-platform compatibility
+        drop(from.handler);
+        fs::rename(from.name, to)?;
+        Ok(Log::new(to)?)
+    }
+
+    // format: (lenght: 8 bytes) (value: variant)
     pub fn append(&mut self, key: &[u8], value: &[u8]) -> io::Result<u64> {
         let key_len = (key.len() as u64).to_be_bytes();
         self.handler.write_all(&key_len)?;
@@ -398,11 +433,6 @@ impl Log {
 
         Ok(())
     }
-
-    // pub fn merge_with(&mut self, other: &Log) -> Log {
-    //     let mut result:
-    //     unimplemented!()
-    // }
 }
 
 #[derive(Default)]
@@ -476,4 +506,68 @@ impl LogRecordLen for u64 {
     fn to_log_len_bytes(len: u64) -> [u8; 8] {
         u64::to_be_bytes(len)
     }
+}
+
+struct LogMerger {
+    maps: Vec<Map>,
+    logs: Vec<Log>,
+    merged_map: Map,
+    merged_log: Log,
+}
+
+impl LogMerger {
+    fn new(log_paths: Vec<PathBuf>, result_log: &Path) -> io::Result<Self> {
+        let mut maps = vec![];
+        let mut logs = vec![];
+        for p in log_paths {
+            let mut log = Log::new(&p)?;
+            let mut m = Map::new();
+            let _ = m.load_from_log(&mut log)?;
+            maps.push(m);
+            logs.push(Log::new(&p)?);
+        }
+
+        if result_log.exists() {
+            info!("merge log exists, deleting...");
+            fs::remove_file(result_log)?;
+        }
+
+        Ok(Self {
+            maps: maps,
+            logs: logs,
+            merged_map: Map::new(),
+            merged_log: Log::new(result_log)?,
+        })
+    }
+
+    fn merge(&mut self) -> io::Result<()> {
+        info!("merging...");
+        for i in 0..self.maps.len() {
+            for (k, v) in self.maps[i].inner.iter() {
+                let overwritten = self.maps[i + 1..].iter().any(|m| m.get(k).is_some());
+                info!("k = {:?}, overwritten = {}", k, overwritten);
+                if !overwritten && !v.is_tombstone() {
+                    let value = self.logs[i].read(v.offset, v.len)?;
+                    let offset = self.merged_log.append(k, &value)?;
+                    self.merged_map
+                        .insert(k.to_owned(), Location::new(offset, value.len()));
+                }
+            }
+        }
+
+        let _ = self.merged_log.flush();
+
+        Ok(())
+    }
+
+    // fn write_to_log(&mut self) {
+    //     for (key, value) in &self.map.inner {
+    //         // TODO:
+    //         // 1. map only stores offset, not which log file, how to retrive and merge them?
+    //         //    rethink the architecture
+    //         // 2. the log that is not the current one should be read only, they are immutable,
+    //         //    maybe have a ImmutableLog? which can avoid concurrent conflict
+    //         self.result_log.append(key);
+    //     }
+    // }
 }
