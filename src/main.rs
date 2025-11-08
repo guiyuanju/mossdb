@@ -78,7 +78,7 @@ impl Engine {
         for entry in fs::read_dir(&path)? {
             let path = entry?.path();
             if path.is_file() && path.extension().map_or(false, |ext| ext == "log") {
-                println!("Reading log file {}", path.to_str().unwrap());
+                info!("Reading log file {}", path.to_str().unwrap());
                 logs.push(Log::new(&path)?);
                 maps.push(Map::new());
             }
@@ -149,7 +149,7 @@ impl Engine {
         for (i, log) in self.logs.iter_mut().enumerate() {
             count += self.maps[i].load_from_log(log)?;
         }
-        println!(
+        info!(
             "processed {} entries, {} index rebuilt",
             count,
             self.maps.iter().map(|e| e.len()).sum::<usize>()
