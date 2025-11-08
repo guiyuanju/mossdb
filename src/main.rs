@@ -279,20 +279,22 @@ impl Repl {
     }
 
     pub fn run(&mut self) {
-        print!("> ");
-        let _ = io::stdout().flush();
-
-        for line in io::stdin().lines() {
-            if line.is_err() {
-                return;
-            }
-            let line = line.unwrap();
-            let line: Vec<&str> = line.split_whitespace().collect();
-
-            self.process_line(&line);
-
+        let mut line = "".to_string();
+        loop {
             print!("> ");
             let _ = io::stdout().flush();
+
+            line.clear();
+            match io::stdin().read_line(&mut line) {
+                Err(e) => {
+                    error!("{}", e);
+                    continue;
+                }
+                Ok(_) => {
+                    let line: Vec<&str> = line.split_whitespace().collect();
+                    self.process_line(&line);
+                }
+            }
         }
     }
 }
