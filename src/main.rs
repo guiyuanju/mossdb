@@ -1,3 +1,4 @@
+use anyhow::{Context, Result};
 use log::{error, info, warn};
 use std::collections::HashMap;
 use std::env;
@@ -69,13 +70,13 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub fn new(logs_dir: &str) -> io::Result<Self> {
+    pub fn new(logs_dir: &str) -> Result<Self> {
         let mut logs = vec![];
         let mut maps = vec![];
         let mut path = PathBuf::new();
         path.push(logs_dir);
 
-        for entry in fs::read_dir(&path)? {
+        for entry in fs::read_dir(&path).context("cannot open log dir")? {
             let path = entry?.path();
             if path.is_file() && path.extension().map_or(false, |ext| ext == "log") {
                 info!("Reading log file {}", path.to_str().unwrap());
@@ -93,10 +94,10 @@ impl Engine {
             logs_dir: path,
         };
 
-        engine.rebuild()?;
+        engine.rebuild();
 
         if engine.logs.len() == 0 {
-            engine.grow()?;
+            engine.grow();
         }
 
         return Ok(engine);
@@ -134,33 +135,29 @@ impl Engine {
     }
 
     // grow the number of logs and hashmaps
-    pub fn grow(&mut self) -> io::Result<()> {
-        self.logs.push(Self::new_log_mono_increase(
-            &self.logs_dir,
-            self.logs.last(),
-        )?);
+    pub fn grow(&mut self) {
+        self.logs
+            .push(Self::new_log_mono_increase(&self.logs_dir, self.logs.last()).unwrap());
         self.maps.push(Map::new());
-        Ok(())
     }
 
     // rebuild from log files
-    fn rebuild(&mut self) -> io::Result<()> {
+    fn rebuild(&mut self) {
         let mut count = 0;
         for (i, log) in self.logs.iter_mut().enumerate() {
-            count += self.maps[i].load_from_log(log)?;
+            count += self.maps[i].load_from_log(log);
         }
         info!(
             "processed {} entries, {} index rebuilt",
             count,
             self.maps.iter().map(|e| e.len()).sum::<usize>()
         );
-        Ok(())
     }
 
     // set key value, append to log, udpate hash, grow if neccessary
-    pub fn set(&mut self, key: &[u8], value: &[u8]) -> io::Result<()> {
-        if self.logs.last_mut().unwrap().size()? >= self.log_limit_bytes {
-            self.grow()?;
+    pub fn set(&mut self, key: &[u8], value: &[u8]) {
+        if self.logs.last_mut().unwrap().size().unwrap() >= self.log_limit_bytes {
+            self.grow();
         }
 
         if self.logs.len() > 2 {
@@ -169,55 +166,54 @@ impl Engine {
             let to_merge2 = self.logs[1].name.clone();
             // merge
             let mut merger =
-                LogMerger::new(vec![to_merge1.clone(), to_merge2.clone()], merged_log_name)?;
-            merger.merge()?;
+                LogMerger::new(vec![to_merge1.clone(), to_merge2.clone()], merged_log_name)
+                    .unwrap();
+            merger.merge().unwrap();
             // update with minimum move in vector, ensure close file before delete and move
             // expect: both old logs are deleted; merged_lod is renamed; in memory map and log are
             // updated
             self.logs.remove(0); // remove and close the first log handler
-            fs::remove_file(&to_merge1)?; // delete the first log file
+            fs::remove_file(&to_merge1).unwrap(); // delete the first log file
             self.maps.splice(0..2, std::iter::once(merger.merged_map)); // update map for both logs
             drop(merger.merged_log); // close the merged log file
-            fs::rename(merged_log_name, &to_merge1)?; // rename merged log to first log
-            self.logs[0] = Log::new(&to_merge1)?; // replace the second log with merged log
-            fs::remove_file(to_merge2)?; // delete the left second log file
+            fs::rename(merged_log_name, &to_merge1).unwrap(); // rename merged log to first log
+            self.logs[0] = Log::new(&to_merge1).unwrap(); // replace the second log with merged log
+            fs::remove_file(to_merge2).unwrap(); // delete the left second log file
         }
 
-        let offset = self.logs.last_mut().unwrap().append(key, value)?;
+        let offset = self.logs.last_mut().unwrap().append(key, value).unwrap();
         self.maps
             .last_mut()
             .unwrap()
             .insert(key.to_vec(), Location::new(offset, value.len()));
-        Ok(())
     }
 
     // get value, check hash to find offset in log
-    pub fn get(&mut self, key: &[u8]) -> io::Result<Vec<u8>> {
-        let err_key_no_exist = Err(io::Error::new(
-            io::ErrorKind::Other,
-            "key doesn't exist in map",
-        ));
+    pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
         for (i, m) in self.maps.iter_mut().enumerate().rev() {
             if let Some(loc) = m.get(key) {
                 if loc.is_tombstone() {
-                    return err_key_no_exist;
+                    return None;
                 }
-                return self.logs[i].read(loc.offset, loc.len);
+                return Some(self.logs[i].read(loc.offset, loc.len).unwrap());
             }
         }
-        return err_key_no_exist;
+        None
     }
 
     // delete key, the tombstone value is an empty byte array
-    pub fn del(&mut self, key: &[u8]) -> io::Result<()> {
-        if let Ok(_) = self.get(key) {
-            self.logs.last_mut().unwrap().append(key, "".as_bytes())?;
+    pub fn del(&mut self, key: &[u8]) {
+        if let Some(_) = self.get(key) {
+            self.logs
+                .last_mut()
+                .unwrap()
+                .append(key, "".as_bytes())
+                .unwrap();
             self.maps
                 .last_mut()
                 .unwrap()
                 .insert(key.to_owned(), Location::tombstone());
         }
-        Ok(())
     }
 }
 
@@ -230,50 +226,44 @@ impl Repl {
         Self { engine: None }
     }
 
-    fn open(&mut self, name: &str) -> io::Result<()> {
+    fn open(&mut self, name: &str) -> Result<()> {
         self.engine = Some(Engine::new(name)?);
         Ok(())
     }
 
-    fn process_cmd(&mut self, cmd: &str, args: &[&str]) -> io::Result<()> {
+    fn process_cmd(&mut self, cmd: &str, args: &[&str]) {
         let engine = self.engine.as_mut().unwrap();
         match cmd {
-            "set" => engine.set(args[0].as_bytes(), args[1].as_bytes())?,
-            "get" => println!(
-                "{}",
-                String::from_utf8_lossy(&engine.get(args[0].as_bytes())?)
-            ),
-            "del" => engine.del(args[0].as_bytes())?,
+            "set" => engine.set(args[0].as_bytes(), args[1].as_bytes()),
+            "get" => {
+                if let Some(v) = engine.get(args[0].as_bytes()) {
+                    println!("{}", String::from_utf8_lossy(&v));
+                } else {
+                    println!("no value found");
+                }
+            }
+            "del" => engine.del(args[0].as_bytes()),
             "dump" => {
                 for log in &mut engine.logs {
                     println!("{:?}:", log.name);
-                    log.dump()?;
+                    log.dump().unwrap();
                 }
             }
             _ => {}
         }
-
-        Ok(())
     }
 
     fn process_line(&mut self, line: &[&str]) {
         match line[0] {
-            "open" => match self.open(line[1]) {
-                Err(e) => {
-                    println!("failed to open logs: {}", e);
-                    return;
-                }
-                Ok(_) => {}
-            },
+            "open" => {
+                let _ = self.open(line[1]).map_err(|e| println!("{}", e));
+            }
             cmd => {
                 if self.engine.is_none() {
                     println!("open log file first");
                     return;
                 }
-                match self.process_cmd(cmd, &line[1..]) {
-                    Err(e) => println!("{}", e),
-                    Ok(_) => {}
-                }
+                self.process_cmd(cmd, &line[1..]);
             }
         }
     }
@@ -328,16 +318,16 @@ impl Map {
     }
 
     // load entry from a log file, can be called multiple times, same key is overwritten
-    fn load_from_log(&mut self, log: &mut Log) -> io::Result<u64> {
+    fn load_from_log(&mut self, log: &mut Log) -> u64 {
         let mut count: u64 = 0;
-        for entry in log.iter()? {
+        for entry in log.iter().unwrap() {
             let key = entry.key.value;
             let value = entry.value;
             self.insert(key, Location::new(value.offset, value.len));
             count += 1;
         }
 
-        Ok(count)
+        count
     }
 }
 
@@ -524,7 +514,7 @@ impl LogMerger {
         for p in log_paths {
             let mut log = Log::new(&p)?;
             let mut m = Map::new();
-            let _ = m.load_from_log(&mut log)?;
+            let _ = m.load_from_log(&mut log);
             maps.push(m);
             logs.push(Log::new(&p)?);
         }
