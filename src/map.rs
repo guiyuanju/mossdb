@@ -50,17 +50,4 @@ impl Map {
     pub fn len(&self) -> usize {
         self.inner.len()
     }
-
-    // load entry from a log file, can be called multiple times, same key is overwritten
-    pub fn load_from_log(&mut self, log: &mut Log) -> u64 {
-        let mut count: u64 = 0;
-        for entry in log.iter().unwrap() {
-            let key = entry.key.value;
-            let value = entry.value;
-            self.insert(key, Location::new(value.offset, value.len));
-            count += 1;
-        }
-
-        count
-    }
 }

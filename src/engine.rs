@@ -98,7 +98,7 @@ impl Engine {
     fn rebuild(&mut self) {
         let mut count = 0;
         for (i, log) in self.logs.iter_mut().enumerate() {
-            count += self.maps[i].load_from_log(log);
+            count += Engine::populate_map_from_log(&mut self.maps[i], log);
         }
         info!(
             "processed {} entries, {} index rebuilt",
@@ -167,5 +167,17 @@ impl Engine {
                 .unwrap()
                 .insert(key.to_owned(), Location::tombstone());
         }
+    }
+
+    pub fn populate_map_from_log(m: &mut Map, l: &mut Log) -> u64 {
+        let mut count: u64 = 0;
+        for entry in l.iter().unwrap() {
+            let key = entry.key.value;
+            let value = entry.value;
+            m.insert(key, Location::new(value.offset, value.len));
+            count += 1;
+        }
+
+        count
     }
 }

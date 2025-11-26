@@ -153,7 +153,7 @@ impl LogMerger {
         for p in log_paths {
             let mut log = Log::new(&p)?;
             let mut m = Map::new();
-            let _ = m.load_from_log(&mut log);
+            let _ = Engine::populate_map_from_log(&mut m, &mut log);
             maps.push(m);
             logs.push(Log::new(&p)?);
         }
