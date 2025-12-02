@@ -7,9 +7,9 @@ use std::{
 };
 
 use crate::{
-    LogMerger,
     log::Log,
     map::{Location, Map},
+    merger::LogMerger,
 };
 
 const LOG_SIZE_LIMIT: u64 = 36; // (8+1 + 8+1)*2: 2 kv pair

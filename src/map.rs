@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 
-use crate::log::Log;
-
 #[derive(Debug)]
 pub struct Location {
     pub offset: u64,
