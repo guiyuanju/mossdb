@@ -41,6 +41,9 @@ impl Repl {
     }
 
     fn process_line(&mut self, line: &[&str]) {
+        if line.len() == 0 {
+            return;
+        }
         match line[0] {
             "open" => {
                 let _ = self.open(line[1]).map_err(|e| println!("{}", e));
