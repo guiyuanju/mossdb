@@ -10,8 +10,6 @@ impl SparseIndex {
         Self { index }
     }
 
-    pub fn populate_from_log(filename: &str, reader: &CachedReader) {}
-
     pub fn get_containing_block_offset(&self, key: &str) -> Option<u64> {
         let res = self
             .index
