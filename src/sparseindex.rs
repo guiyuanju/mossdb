@@ -15,12 +15,12 @@ impl SparseIndex {
             .index
             .binary_search_by_key(&key.to_string(), |(k, _)| k.to_string()); // TODO: a lot of to_string
         match res {
-            Ok(offset) => Some(offset as u64),
-            Err(offset) => {
-                if offset == 0 {
+            Ok(idx) => Some(self.index[idx].1),
+            Err(idx) => {
+                if idx == 0 {
                     return None;
                 }
-                return Some(offset as u64 - 1);
+                return Some(self.index[idx - 1].1);
             }
         }
     }
