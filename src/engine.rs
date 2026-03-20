@@ -8,18 +8,16 @@ use std::{
 };
 
 use crate::{
+    layout::{self, LOG_FILE_EXT, MEMTABLE_MAX_SIZE_BYTES},
     memtable::MemTable,
     sstable::{self, SSTable},
     writer::Writer,
 };
 
-const LOG_SIZE_LIMIT: u64 = 36; // (8+1 + 8+1)*2: 2 kv pair
-
 #[derive(Debug)]
 pub struct Engine {
     pub memtable: RefCell<MemTable>,
     pub sstables: Vec<SSTable>,
-    pub memtable_limit_bytes: u64,
     pub sstables_dir: PathBuf,
 }
 
@@ -28,7 +26,6 @@ impl Engine {
         Self {
             memtable: RefCell::new(MemTable::new()),
             sstables: vec![],
-            memtable_limit_bytes: LOG_SIZE_LIMIT,
             sstables_dir: PathBuf::new(),
         }
     }
@@ -56,7 +53,6 @@ impl Engine {
             self.sstables.push(SSTable::new(file)?);
         }
 
-        self.memtable_limit_bytes = LOG_SIZE_LIMIT;
         self.sstables_dir = path;
 
         Ok(())
@@ -67,22 +63,24 @@ impl Engine {
             bail!("please open a directory");
         }
 
-        match self.sstables.last() {
-            None => Ok("0".to_string()),
+        let name = match self.sstables.last() {
+            None => "0".to_string(),
             Some(latest) => {
                 let mut path = PathBuf::new();
                 path.push(&latest.filename);
                 let name = path.file_stem().unwrap().to_str().unwrap().to_string();
                 let num: u64 = name.parse().unwrap();
-                Ok((num + 1).to_string())
+                (num + 1).to_string()
             }
-        }
+        };
+
+        Ok(format!("{}.{}", name, LOG_FILE_EXT))
     }
 
     // set key value, append to log, udpate hash, grow if neccessary
     pub fn set(&mut self, key: String, value: String) {
         self.memtable.borrow_mut().set(key, value);
-        if self.memtable.borrow().len() as u64 >= self.memtable_limit_bytes {
+        if self.memtable.borrow().byte_size() as u64 >= MEMTABLE_MAX_SIZE_BYTES {
             let old_memtable = self.memtable.replace(MemTable::new());
             // flush the full memtable in a new thread
             // TODO: makes sure write thread finish even quit the engine
@@ -117,5 +115,10 @@ impl Engine {
     // delete key, the tombstone value is an empty byte array
     pub fn del(&mut self, key: &str) {
         todo!()
+    }
+
+    pub fn dump(&mut self) {
+        println!("memtable = {:?}", self.memtable);
+        println!("sstables = {:?}", self.sstables);
     }
 }

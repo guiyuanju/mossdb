@@ -48,7 +48,7 @@ impl Repl {
                 self.engine.del(args[0]);
             }
             "dump" => {
-                todo!()
+                self.engine.dump();
             }
             _ => {}
         }

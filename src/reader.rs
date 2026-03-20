@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom};
 
@@ -85,7 +85,8 @@ impl CachedReader {
     fn load_block_to_cache(&mut self, start: u64) -> Result<()> {
         let mut file = OpenOptions::new().read(true).open(&self.filename)?;
         file.seek(SeekFrom::Start(start))?;
-        file.read_exact(&mut self.cached_block.inner[..])?;
+        file.read_exact(&mut self.cached_block.inner[..])
+            .context("failed to read block")?;
         self.has_data_in_cache = true;
         Ok(())
     }
