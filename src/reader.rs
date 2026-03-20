@@ -40,12 +40,14 @@ impl CachedReader {
         let mut cur = 0 as usize;
         while cur < self.cached_block.len() {
             let entry = Entry::new(&mut self.cached_block.inner[cur..]);
-            cur += entry.retieve_entry_len();
-            let (k, v) = entry.retrive_kv();
+            let Some((k, v, entry_len)) = entry.retrive_kv() else {
+                break;
+            };
             let cur_key = String::from_utf8_lossy(k).to_string();
             if key == cur_key {
                 return Ok(String::from_utf8_lossy(v).to_string());
             }
+            cur += entry_len;
         }
 
         // TODO: add a jump array to block to accelerate search speed in one block
