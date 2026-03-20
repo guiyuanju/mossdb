@@ -36,3 +36,8 @@ fn main() -> io::Result<()> {
 
     Ok(())
 }
+
+// TODO: use version set, flush thread write sstable, then add a new version, then swap the lastest version
+// TODO: add compaction thread
+// TODO: use immutable memtable queue and a mutable current memtable + multiple flush threads
+// TODO: add WAL

@@ -83,7 +83,7 @@ impl Engine {
         if self.memtable.borrow().byte_size() as u64 >= MEMTABLE_MAX_SIZE_BYTES {
             let old_memtable = self.memtable.replace(MemTable::new());
             // flush the full memtable in a new thread
-            // TODO: makes sure write thread finish even quit the engine
+            // TODO: make flush thread long running and notify main thread when finishing
             let filename = self.next_log_file_name();
             thread::spawn(move || {
                 match filename {
