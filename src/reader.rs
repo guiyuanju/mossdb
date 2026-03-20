@@ -2,83 +2,92 @@ use anyhow::{Result, bail};
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom};
 
-use crate::layout::{Block, KEY_LEN_BYTES, KeyValueMeta, Len, VAL_LEN_BYTES};
+use crate::layout::{
+    BLOCK_SIZE_BYTES, Block, Entry, KEY_LEN_BYTES, KeyValueMeta, Len, MetaData,
+    SPARSE_INDEX_COUNT_PER_BLOCK, SPARSE_INDEX_ENTRY_BYTE_LEN, SPARSE_INDEX_START_OFFSET,
+    SparseIndexEntry, VAL_LEN_BYTES,
+};
+use crate::sparseindex::SparseIndex;
 use crate::types::{Key, Offset};
 
 #[derive(Debug)]
-pub struct Reader {
+pub struct CachedReader {
     cached_block: Option<Block>,
     block_offset: u64,
     filename: String,
 }
 
-impl Reader {
-    pub fn new() -> Self {
+impl CachedReader {
+    pub fn new(filename: String) -> Self {
         Self {
             cached_block: None,
             block_offset: 0,
-            filename: "".to_string(),
+            filename: filename,
         }
     }
 
-    pub fn readKey(&mut self, filename: &str, block_offset: u64, key: &str) -> Result<String> {
+    pub fn read_key(&mut self, block_offset: u64, key: &str) -> Result<String> {
         if self.cached_block.is_none()
-            || self.filename != filename
             || self.block_offset > block_offset
             || block_offset >= self.block_offset + self.cached_block.as_ref().unwrap().len() as u64
         {
-            self.load_block_to_cache(filename, block_offset)?;
+            self.load_block_to_cache(block_offset)?;
+            self.block_offset = block_offset;
         }
+
+        let Some(block) = &mut self.cached_block else {
+            panic!("block not cahced");
+        };
+
+        let mut cur = 0 as usize;
+        while cur < block.len() {
+            let entry = Entry::new(&mut block.inner[cur..]);
+            cur += entry.retieve_entry_len();
+            let (k, v) = entry.retrive_kv();
+            let cur_key = String::from_utf8_lossy(k).to_string();
+            if key == cur_key {
+                return Ok(String::from_utf8_lossy(v).to_string());
+            }
+        }
+
         // TODO: add a jump array to block to accelerate search speed in one block
+        bail!("key not found in current block");
     }
 
-    pub fn readMeta(&mut self, filename: &str, start: Offset) -> Result<KeyValueMeta> {
-        if self.cached_block.is_none()
-            || self.filename != filename
-            || self.block_offset > start
-            || start >= self.block_offset + self.cached_block.as_ref().unwrap().len() as u64
-        {
-            self.load_block_to_cache(filename, start)?;
+    pub fn read_sparse_index(&mut self) -> Result<Vec<(String, u64)>> {
+        if self.cached_block.is_none() || self.block_offset != 0 {
+            self.load_block_to_cache(0)?;
+            self.block_offset = 0;
+        }
+        let meta = MetaData::new(&mut self.cached_block.as_mut().unwrap().inner);
+        let mut cur_offset = meta.retrieve_sparse_index_block_start_offset();
+        let data_block_start_offset = meta.retrieve_data_block_start_offset();
+        let mut res: Vec<(String, u64)> = vec![];
+        while cur_offset < data_block_start_offset {
+            if self.cached_block.is_none() || self.block_offset != cur_offset {
+                self.load_block_to_cache(cur_offset)?;
+                self.block_offset = cur_offset;
+            }
+
+            let Some(block) = &mut self.cached_block else {
+                panic!("cache is none");
+            };
+
+            for i in 0..SPARSE_INDEX_COUNT_PER_BLOCK {
+                let sparse_index_entry =
+                    SparseIndexEntry::new(&mut block.inner[(i * SPARSE_INDEX_ENTRY_BYTE_LEN)..]);
+                let key = sparse_index_entry.retrieve_key();
+                let offset = sparse_index_entry.retrieve_offset();
+                res.push((key, offset));
+            }
+
+            cur_offset += BLOCK_SIZE_BYTES as u64;
         }
 
-        let mut file = OpenOptions::new().read(true).open(filename)?;
-        file.seek(SeekFrom::Start(start))?;
-
-        let mut meta: KeyValueMeta = KeyValueMeta::new();
-
-        // read key length
-        let mut key_len = [0; KEY_LEN_BYTES];
-        if file.read(&mut key_len[..])? < key_len.len() {
-            bail!("read less key len in meta");
-        }
-        meta.key_len = u8::from_le_bytes(key_len) as u64;
-        meta.key_offset = start;
-
-        // read val length
-        let mut val_len = [0; VAL_LEN_BYTES];
-        if file.read(&mut val_len[..])? < val_len.len() {
-            bail!("read less val len in meta");
-        }
-        meta.val_len = u16::from_be_bytes(val_len) as u64;
-        meta.val_offset = start + meta.key_len;
-
-        Ok(meta)
+        Ok(res)
     }
 
-    // TODO: implement cache to reduce disk io
-    pub fn read(&mut self, filename: &str, start: Offset, len: u64) -> Result<Vec<u8>> {
-        let mut file = OpenOptions::new().read(true).open(filename)?;
-        file.seek(SeekFrom::Start(start))?;
-
-        let mut val: Vec<u8> = vec![0; len as usize];
-        if file.read(&mut val)? < val.len() {
-            bail!("read less val");
-        }
-
-        Ok(val)
-    }
-
-    fn load_block_to_cache(&self, filename: &str, start: u64) -> Result<()> {
+    fn load_block_to_cache(&self, start: u64) -> Result<()> {
         todo!()
     }
 }
