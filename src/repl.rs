@@ -5,36 +5,50 @@ use anyhow::Result;
 use log::error;
 
 pub struct Repl {
-    engine: Option<Engine>,
+    engine: Engine,
 }
 
 impl Repl {
     pub fn new() -> Self {
-        Self { engine: None }
+        Self {
+            engine: Engine::new(),
+        }
     }
 
     fn open(&mut self, name: &str) -> Result<()> {
-        self.engine = Some(Engine::new(name)?);
+        self.engine.open_log_dir(name)?;
         Ok(())
     }
 
     fn process_cmd(&mut self, cmd: &str, args: &[&str]) {
-        let engine = self.engine.as_mut().unwrap();
         match cmd {
-            "set" => engine.set(args[0].as_bytes(), args[1].as_bytes()),
+            "set" => {
+                if args.len() != 2 {
+                    println!("expect a key and a value");
+                    return;
+                }
+                self.engine.set(args[0].to_string(), args[1].to_string());
+            }
             "get" => {
-                if let Some(v) = engine.get(args[0].as_bytes()) {
-                    println!("{}", String::from_utf8_lossy(&v));
+                if args.len() != 1 {
+                    println!("expect a key");
+                    return;
+                }
+                if let Ok(v) = self.engine.get(args[0]) {
+                    println!("{}", v);
                 } else {
                     println!("no value found");
                 }
             }
-            "del" => engine.del(args[0].as_bytes()),
-            "dump" => {
-                for log in &mut engine.logs {
-                    println!("{:?}:", log.name);
-                    log.dump().unwrap();
+            "del" => {
+                if args.len() != 1 {
+                    println!("expect a key");
+                    return;
                 }
+                self.engine.del(args[0]);
+            }
+            "dump" => {
+                todo!()
             }
             _ => {}
         }
@@ -46,13 +60,13 @@ impl Repl {
         }
         match line[0] {
             "open" => {
+                if line.len() != 2 {
+                    println!("expect a path to a directory");
+                    return;
+                }
                 let _ = self.open(line[1]).map_err(|e| println!("{}", e));
             }
             cmd => {
-                if self.engine.is_none() {
-                    println!("open log file first");
-                    return;
-                }
                 self.process_cmd(cmd, &line[1..]);
             }
         }

@@ -1,183 +1,120 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use log::info;
 use std::{
+    cell::RefCell,
     fs::{self, OpenOptions},
-    io,
     path::{Path, PathBuf},
+    thread,
 };
 
-use crate::{
-    log::Log,
-    map::{Location, Map},
-    merger::LogMerger,
-};
+use crate::{memtable::MemTable, sstable::SSTable, writer::Writer};
 
 const LOG_SIZE_LIMIT: u64 = 36; // (8+1 + 8+1)*2: 2 kv pair
 
 #[derive(Debug)]
 pub struct Engine {
-    pub maps: Vec<Map>,
-    pub logs: Vec<Log>,
-    pub log_limit_bytes: u64,
-    pub logs_dir: PathBuf,
+    pub memtable: RefCell<MemTable>,
+    pub sstables: Vec<SSTable>,
+    pub memtable_limit_bytes: u64,
+    pub sstables_dir: PathBuf,
 }
 
 impl Engine {
-    pub fn new(logs_dir: &str) -> Result<Self> {
+    pub fn new() -> Self {
+        Self {
+            memtable: RefCell::new(MemTable::new()),
+            sstables: vec![],
+            memtable_limit_bytes: LOG_SIZE_LIMIT,
+            sstables_dir: PathBuf::new(),
+        }
+    }
+
+    pub fn open_log_dir(&mut self, dir: &str) -> Result<()> {
         let mut logs = vec![];
-        let mut maps = vec![];
         let mut path = PathBuf::new();
-        path.push(logs_dir);
+        path.push(dir);
+        if !path.is_dir() {
+            bail!("not a directory");
+        }
 
         for entry in fs::read_dir(&path).context("cannot open log dir")? {
             let path = entry?.path();
             if path.is_file() && path.extension().map_or(false, |ext| ext == "log") {
                 info!("Reading log file {}", path.to_str().unwrap());
-                logs.push(Log::new(&path)?);
-                maps.push(Map::new());
+                logs.push(path);
             }
         }
 
-        logs.sort_by(|a, b| a.name.to_string_lossy().cmp(&b.name.to_string_lossy()));
+        logs.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
 
-        let mut engine = Engine {
-            maps,
-            logs,
-            log_limit_bytes: LOG_SIZE_LIMIT,
-            logs_dir: path,
-        };
+        self.sstables = logs
+            .iter()
+            .map(|file| {
+                let name = file.to_string_lossy().to_string();
+                SSTable::new(name)
+            })
+            .collect();
 
-        engine.rebuild();
+        self.memtable_limit_bytes = LOG_SIZE_LIMIT;
+        self.sstables_dir = path;
 
-        if engine.logs.len() == 0 {
-            engine.grow();
+        Ok(())
+    }
+
+    fn next_log_file_name(&self) -> Result<String> {
+        if !self.sstables_dir.is_dir() {
+            bail!("please open a directory");
         }
 
-        return Ok(engine);
-    }
-
-    fn new_log(dir: &PathBuf, name: &str) -> io::Result<Log> {
-        let mut path = PathBuf::new();
-        path.push(dir);
-        path.push(name.to_string() + ".log");
-        OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .map_err(|e| {
-                io::Error::new(io::ErrorKind::Other, format!("cannot create log: {}", e))
-            })?;
-        Ok(Log::new(&path)?)
-    }
-
-    fn new_log_mono_increase(dir: &PathBuf, latest_log: Option<&Log>) -> io::Result<Log> {
-        match latest_log {
-            None => Self::new_log(dir, "0"),
+        match self.sstables.last() {
+            None => Ok("0".to_string()),
             Some(latest) => {
-                let name = latest
-                    .name
-                    .file_stem()
-                    .unwrap()
-                    .to_str()
-                    .unwrap()
-                    .to_string();
+                let mut path = PathBuf::new();
+                path.push(&latest.filename);
+                let name = path.file_stem().unwrap().to_str().unwrap().to_string();
                 let num: u64 = name.parse().unwrap();
-                Self::new_log(dir, &(num + 1).to_string())
+                Ok((num + 1).to_string())
             }
         }
-    }
-
-    // grow the number of logs and hashmaps
-    pub fn grow(&mut self) {
-        self.logs
-            .push(Self::new_log_mono_increase(&self.logs_dir, self.logs.last()).unwrap());
-        self.maps.push(Map::new());
-    }
-
-    // rebuild from log files
-    fn rebuild(&mut self) {
-        let mut count = 0;
-        for (i, log) in self.logs.iter_mut().enumerate() {
-            count += Engine::populate_map_from_log(&mut self.maps[i], log);
-        }
-        info!(
-            "processed {} entries, {} index rebuilt",
-            count,
-            self.maps.iter().map(|e| e.len()).sum::<usize>()
-        );
     }
 
     // set key value, append to log, udpate hash, grow if neccessary
-    pub fn set(&mut self, key: &[u8], value: &[u8]) {
-        if self.logs.last_mut().unwrap().size().unwrap() >= self.log_limit_bytes {
-            self.grow();
+    pub fn set(&mut self, key: String, value: String) {
+        self.memtable.borrow_mut().set(key, value);
+        if self.memtable.borrow().len() as u64 >= self.memtable_limit_bytes {
+            let old_memtable = self.memtable.replace(MemTable::new());
+            // flush the full memtable in a new thread
+            // TODO: makes sure write thread finish even quit the engine
+            let filename = self.next_log_file_name();
+            thread::spawn(move || {
+                match filename {
+                    Err(err) => println!("failed when next log file name: {}", err),
+                    Ok(filename) => {
+                        _ = Writer::write(old_memtable, filename)
+                            .map_err(|err| println!("failed to write {}", err));
+                    }
+                };
+            });
         }
-
-        if self.logs.len() > 2 {
-            let merged_log_name = Path::new("log.merging");
-            let to_merge1 = self.logs[0].name.clone();
-            let to_merge2 = self.logs[1].name.clone();
-            // merge
-            let mut merger =
-                LogMerger::new(vec![to_merge1.clone(), to_merge2.clone()], merged_log_name)
-                    .unwrap();
-            merger.merge().unwrap();
-            // update with minimum move in vector, ensure close file before delete and move
-            // expect: both old logs are deleted; merged_lod is renamed; in memory map and log are
-            // updated
-            self.logs.remove(0); // remove and close the first log handler
-            fs::remove_file(&to_merge1).unwrap(); // delete the first log file
-            self.maps.splice(0..2, std::iter::once(merger.merged_map)); // update map for both logs
-            drop(merger.merged_log); // close the merged log file
-            fs::rename(merged_log_name, &to_merge1).unwrap(); // rename merged log to first log
-            self.logs[0] = Log::new(&to_merge1).unwrap(); // replace the second log with merged log
-            fs::remove_file(to_merge2).unwrap(); // delete the left second log file
-        }
-
-        let offset = self.logs.last_mut().unwrap().append(key, value).unwrap();
-        self.maps
-            .last_mut()
-            .unwrap()
-            .insert(key.to_vec(), Location::new(offset, value.len()));
     }
 
     // get value, check hash to find offset in log
-    pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
-        for (i, m) in self.maps.iter_mut().enumerate().rev() {
-            if let Some(loc) = m.get(key) {
-                if loc.is_tombstone() {
-                    return None;
-                }
-                return Some(self.logs[i].read(loc.offset, loc.len).unwrap());
+    pub fn get(&mut self, key: &str) -> Result<String> {
+        if let Some(res) = self.memtable.borrow().get(key) {
+            return Ok(res);
+        }
+
+        for t in self.sstables.iter_mut().rev() {
+            if let Ok(res) = t.get(key) {
+                return Ok(res);
             }
         }
-        None
+
+        return Err(anyhow!("value not found"));
     }
 
     // delete key, the tombstone value is an empty byte array
-    pub fn del(&mut self, key: &[u8]) {
-        if let Some(_) = self.get(key) {
-            self.logs
-                .last_mut()
-                .unwrap()
-                .append(key, "".as_bytes())
-                .unwrap();
-            self.maps
-                .last_mut()
-                .unwrap()
-                .insert(key.to_owned(), Location::tombstone());
-        }
-    }
-
-    pub fn populate_map_from_log(m: &mut Map, l: &mut Log) -> u64 {
-        let mut count: u64 = 0;
-        for entry in l.iter().unwrap() {
-            let key = entry.key.value;
-            let value = entry.value;
-            m.insert(key, Location::new(value.offset, value.len));
-            count += 1;
-        }
-
-        count
+    pub fn del(&mut self, key: &str) {
+        todo!()
     }
 }
