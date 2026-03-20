@@ -7,9 +7,10 @@ use anyhow::{Result, bail};
 //  index block offset (INDEX_META_LEN) |
 //  data block offset |
 //  key length | key value | val length | val value ...
-
+pub const LOG_FILE_EXT: &str = "log";
 pub const BLOCK_SIZE_BYTES: usize = 16 * 1024; // 16 KB
-pub const MEMTABLE_MAX_SIZE_BYTES: usize = 64 * 1024 * 1024; // 64 MB
+pub const MEMTABLE_MAX_SIZE_BYTES: u64 = 36; // (8+1 + 8+1)*2: 2 kv pair
+// pub const MEMTABLE_MAX_SIZE_BYTES: usize = 64 * 1024 * 1024; // 64 MB
 // pub const BLOCK_COUNT: usize = MEMTABLE_MAX_SIZE_BYTES / BLOCK_SIZE_BYTES; // 4096 blocks in one level 0 log file
 
 pub const INDEX_BLOCK_OFFSET_META_OFFSET: usize = 0; // start at 0 of a file
