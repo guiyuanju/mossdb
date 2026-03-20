@@ -63,7 +63,6 @@ impl Layout {
 
         let data_block_count = data_blocks.inner.len() as u64;
         let mut index_block_count = data_block_count / SPARSE_INDEX_COUNT_PER_BLOCK as u64;
-        print!("{}", data_block_count % SPARSE_INDEX_COUNT_PER_BLOCK as u64);
         if data_block_count % SPARSE_INDEX_COUNT_PER_BLOCK as u64 != 0 {
             index_block_count += 1;
         }
@@ -214,28 +213,43 @@ impl<'a> Entry<'a> {
         Ok(KEY_LEN_BYTES + VAL_LEN_BYTES + key.len() + val.len())
     }
 
-    // return (key_len, val_len)
-    pub fn retrive_meta(&self) -> (usize, usize) {
+    // return Option<(key_len, val_len)>
+    // if none -> current data doesn't has enough lenght of data to be interpreted as meta
+    fn retrive_meta(&self) -> Option<(usize, usize)> {
+        if KEY_LEN_BYTES + VAL_LEN_BYTES > self.data.len() {
+            return None;
+        }
         let key_len = self.data[0] as usize;
         let mut val_len_bytes: [u8; VAL_LEN_BYTES] = [0; VAL_LEN_BYTES];
         val_len_bytes[..].copy_from_slice(&self.data[Self::val_len_range()]);
         let val_len = u16::from_le_bytes(val_len_bytes) as usize;
 
-        (key_len, val_len)
+        Some((key_len, val_len))
     }
 
-    pub fn retrive_kv(&'a self) -> (&'a [u8], &'a [u8]) {
-        let (key_len, val_len) = self.retrive_meta();
+    // if none -> data is not valid as a kv entry
+    // e.g. not long enough, possible passed in the empty space at the end of a block
+    /// return Option<key, value, lenght of entry = key_len + value_len + meta_len>
+    pub fn retrive_kv(&'a self) -> Option<(&'a [u8], &'a [u8], usize)> {
+        let (key_len, val_len) = self.retrive_meta()?;
+        if key_len + val_len + KEY_LEN_BYTES + VAL_LEN_BYTES > self.data.len() {
+            return None;
+        }
         let key = &self.data[Self::key_range(key_len)];
         let val = &self.data[Self::val_range(key_len, val_len)];
 
-        (key, val)
+        Some((
+            key,
+            val,
+            (key_len + val_len) as usize + KEY_LEN_BYTES + VAL_LEN_BYTES,
+        ))
     }
 
     // get the length of the whole entry = key_len + val_len + key + val
-    pub fn retieve_entry_len(&self) -> usize {
-        let (key_len, val_len) = self.retrive_meta();
-        key_len + val_len + KEY_LEN_BYTES + VAL_LEN_BYTES
+    // if none -> data not valid as a kv entry
+    pub fn retieve_entry_len(&self) -> Option<usize> {
+        let (key_len, val_len) = self.retrive_meta()?;
+        Some(key_len + val_len + KEY_LEN_BYTES + VAL_LEN_BYTES)
     }
 }
 
