@@ -7,7 +7,11 @@ use std::{
     thread,
 };
 
-use crate::{memtable::MemTable, sstable::SSTable, writer::Writer};
+use crate::{
+    memtable::MemTable,
+    sstable::{self, SSTable},
+    writer::Writer,
+};
 
 const LOG_SIZE_LIMIT: u64 = 36; // (8+1 + 8+1)*2: 2 kv pair
 
@@ -47,13 +51,10 @@ impl Engine {
 
         logs.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
 
-        self.sstables = logs
-            .iter()
-            .map(|file| {
-                let name = file.to_string_lossy().to_string();
-                SSTable::new(name)
-            })
-            .collect();
+        for log in logs {
+            let file = log.to_string_lossy().to_string();
+            self.sstables.push(SSTable::new(file)?);
+        }
 
         self.memtable_limit_bytes = LOG_SIZE_LIMIT;
         self.sstables_dir = path;
