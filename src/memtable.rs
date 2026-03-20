@@ -1,4 +1,5 @@
-use std::collections::BTreeMap;
+use std::collections::btree_map::Iter;
+use std::collections::{BTreeMap, btree_map};
 use std::iter::Iterator;
 
 #[derive(Debug)]
@@ -44,13 +45,12 @@ impl MemTable {
     }
 }
 
-impl Iterator for MemTable {
+impl IntoIterator for MemTable {
     type Item = (String, String);
 
-    fn next(&mut self) -> Option<Self::Item> {
-        self.store
-            .iter()
-            .next()
-            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+    type IntoIter = btree_map::IntoIter<String, String>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.store.into_iter()
     }
 }
