@@ -9,7 +9,7 @@ use anyhow::{Result, bail};
 //  key length | key value | val length | val value ...
 pub const LOG_FILE_EXT: &str = "log";
 pub const BLOCK_SIZE_BYTES: usize = 16 * 1024; // 16 KB
-pub const MEMTABLE_MAX_SIZE_BYTES: u64 = 36; // (8+1 + 8+1)*2: 2 kv pair
+pub const MEMTABLE_MAX_SIZE_BYTES: u64 = 16;
 // pub const MEMTABLE_MAX_SIZE_BYTES: usize = 64 * 1024 * 1024; // 64 MB
 // pub const BLOCK_COUNT: usize = MEMTABLE_MAX_SIZE_BYTES / BLOCK_SIZE_BYTES; // 4096 blocks in one level 0 log file
 
@@ -62,7 +62,11 @@ impl Layout {
         }
 
         let data_block_count = data_blocks.inner.len() as u64;
-        let index_block_count = data_block_count / SPARSE_INDEX_COUNT_PER_BLOCK as u64;
+        let mut index_block_count = data_block_count / SPARSE_INDEX_COUNT_PER_BLOCK as u64;
+        print!("{}", data_block_count % SPARSE_INDEX_COUNT_PER_BLOCK as u64);
+        if data_block_count % SPARSE_INDEX_COUNT_PER_BLOCK as u64 != 0 {
+            index_block_count += 1;
+        }
         let meta_block_count = 1 as u64;
 
         // write index blocks
@@ -132,15 +136,15 @@ impl Block {
 #[derive(Default)]
 pub struct Blocks {
     pub inner: Vec<Block>,
-    current_block_idx: usize,
+    current_block_idx: isize,
     current_idx_in_block: usize,
 }
 
 impl Blocks {
     pub fn new() -> Self {
         Self {
-            inner: vec![Block::new()],
-            current_block_idx: 0,
+            inner: vec![],
+            current_block_idx: -1,
             current_idx_in_block: 0,
         }
     }
@@ -151,18 +155,18 @@ impl Blocks {
     //  - true: this data is written to a new block
     //  - false: no new block is allocated
     pub fn write(&mut self, data: &[u8]) -> bool {
-        let mut res = false;
-        if BLOCK_SIZE_BYTES - self.current_idx_in_block < data.len() {
+        let mut new_block_created = false;
+        if self.inner.len() == 0 || BLOCK_SIZE_BYTES - self.current_idx_in_block < data.len() {
             self.inner.push(Block::new());
             self.current_block_idx += 1;
             self.current_idx_in_block = 0;
-            res = true;
+            new_block_created = true;
         }
         for &byte in data {
-            self.inner[self.current_block_idx].inner[self.current_idx_in_block] = byte;
+            self.inner[self.current_block_idx as usize].inner[self.current_idx_in_block] = byte;
             self.current_idx_in_block += 1;
         }
-        return res;
+        return new_block_created;
     }
 }
 
