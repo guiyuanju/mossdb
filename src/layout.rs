@@ -274,7 +274,8 @@ impl<'a> SparseIndexEntry<'a> {
         Self { data: data }
     }
 
-    pub fn retrieve_key(&self) -> String {
+    // key may not exist because key len is zero
+    pub fn retrieve_key(&self) -> Option<String> {
         // a key max 32 byte, in sparse index, even a key is smaller than 32, extra space is filled with \0
         // we need to retrive the true key
         let mut key_end = 0;
@@ -284,7 +285,10 @@ impl<'a> SparseIndexEntry<'a> {
             }
             key_end += 1;
         }
-        String::from_utf8_lossy(&self.data[0..key_end]).to_string()
+        if key_end == 0 {
+            return None;
+        }
+        Some(String::from_utf8_lossy(&self.data[0..key_end]).to_string())
     }
 
     pub fn retrieve_offset(&self) -> u64 {

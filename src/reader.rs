@@ -61,7 +61,8 @@ impl CachedReader {
         let mut cur_offset = meta.retrieve_sparse_index_block_start_offset();
         let data_block_start_offset = meta.retrieve_data_block_start_offset();
         let mut res: Vec<(String, u64)> = vec![];
-        while cur_offset < data_block_start_offset {
+        let mut has_more_data = true;
+        while cur_offset < data_block_start_offset && has_more_data {
             if !self.has_data_in_cache || self.block_offset != cur_offset {
                 self.load_block_to_cache(cur_offset)?;
                 self.block_offset = cur_offset;
@@ -71,7 +72,10 @@ impl CachedReader {
                 let sparse_index_entry = SparseIndexEntry::new(
                     &mut self.cached_block.inner[(i * SPARSE_INDEX_ENTRY_BYTE_LEN)..],
                 );
-                let key = sparse_index_entry.retrieve_key();
+                let Some(key) = sparse_index_entry.retrieve_key() else {
+                    has_more_data = false;
+                    break;
+                };
                 let offset = sparse_index_entry.retrieve_offset();
                 res.push((key, offset));
             }
