@@ -4,8 +4,8 @@ use crate::types::Offset;
 use anyhow::{Result, bail};
 
 // Disk file layout:
-//  index block offset (INDEX_META_LEN) | index block length |
-//  data block offset | data block length
+//  index block offset (INDEX_META_LEN) |
+//  data block offset |
 //  key length | key value | val length | val value ...
 
 pub const BLOCK_SIZE_BYTES: usize = 16 * 1024; // 16 KB
@@ -19,6 +19,7 @@ pub const DATA_BLOCK_OFFSET_META_OFFSET_BYTES: usize = 8; // u64
 // the length of metadata at the start of a log file, must fit into one block
 pub const META_DATA_BYTE_LEN: usize =
     INDEX_BLOCK_OFFSET_META_OFFSET_BYTES + DATA_BLOCK_OFFSET_META_OFFSET_BYTES;
+pub const SPARSE_INDEX_START_OFFSET: usize = META_DATA_BYTE_LEN;
 
 // byte layout of a single pair of KV: [key_len] [val_len] [key] [val]
 // key_len_len defines the byte size of key_len, limit the maximum length of byte in key
@@ -92,11 +93,13 @@ impl Layout {
         // write meta data block
         let mut meta_block = Blocks::new();
         let mut meta_data = [0 as u8; META_DATA_BYTE_LEN];
+        // write index block offset
         let index_offset_in_log: [u8; INDEX_BLOCK_OFFSET_META_OFFSET_BYTES] =
             (meta_block_count * BLOCK_SIZE_BYTES as u64).to_le_bytes();
         meta_data[INDEX_BLOCK_OFFSET_META_OFFSET
             ..(INDEX_BLOCK_OFFSET_META_OFFSET + INDEX_BLOCK_OFFSET_META_OFFSET_BYTES)]
             .copy_from_slice(&index_offset_in_log[..]);
+        // write data block offset
         let data_offset_in_log: [u8; DATA_BLOCK_OFFSET_META_OFFSET_BYTES] =
             ((meta_block_count + index_block_count) * BLOCK_SIZE_BYTES as u64).to_le_bytes();
         meta_data[DATA_BLOCK_OFFSET_META_OFFSET
@@ -206,16 +209,86 @@ impl<'a> Entry<'a> {
         Ok(KEY_LEN_BYTES + VAL_LEN_BYTES + key.len() + val.len())
     }
 
-    pub fn retrive_kv(&'a self) -> (&'a [u8], &'a [u8]) {
+    // return (key_len, val_len)
+    pub fn retrive_meta(&self) -> (usize, usize) {
         let key_len = self.data[0] as usize;
         let mut val_len_bytes: [u8; VAL_LEN_BYTES] = [0; VAL_LEN_BYTES];
         val_len_bytes[..].copy_from_slice(&self.data[Self::val_len_range()]);
         let val_len = u16::from_le_bytes(val_len_bytes) as usize;
 
+        (key_len, val_len)
+    }
+
+    pub fn retrive_kv(&'a self) -> (&'a [u8], &'a [u8]) {
+        let (key_len, val_len) = self.retrive_meta();
         let key = &self.data[Self::key_range(key_len)];
         let val = &self.data[Self::val_range(key_len, val_len)];
 
         (key, val)
+    }
+
+    // get the length of the whole entry = key_len + val_len + key + val
+    pub fn retieve_entry_len(&self) -> usize {
+        let (key_len, val_len) = self.retrive_meta();
+        key_len + val_len + KEY_LEN_BYTES + VAL_LEN_BYTES
+    }
+}
+
+pub struct MetaData<'a> {
+    pub data: &'a mut [u8],
+}
+
+impl<'a> MetaData<'a> {
+    pub fn new(data: &'a mut [u8]) -> Self {
+        Self { data: data }
+    }
+
+    pub fn retrieve_sparse_index_block_start_offset(&self) -> u64 {
+        let offset_data = &self.data[INDEX_BLOCK_OFFSET_META_OFFSET
+            ..(INDEX_BLOCK_OFFSET_META_OFFSET + INDEX_BLOCK_OFFSET_META_OFFSET_BYTES)];
+        let mut index_offset_bytes = [0 as u8; INDEX_BLOCK_OFFSET_META_OFFSET_BYTES];
+        index_offset_bytes.copy_from_slice(offset_data);
+        u64::from_le_bytes(index_offset_bytes)
+    }
+
+    pub fn retrieve_data_block_start_offset(&self) -> u64 {
+        let data_offset_data = &self.data[DATA_BLOCK_OFFSET_META_OFFSET
+            ..(DATA_BLOCK_OFFSET_META_OFFSET + DATA_BLOCK_OFFSET_META_OFFSET_BYTES)];
+        let mut data_offset_bytes = [0 as u8; DATA_BLOCK_OFFSET_META_OFFSET_BYTES];
+        data_offset_bytes.copy_from_slice(data_offset_data);
+        u64::from_le_bytes(data_offset_bytes)
+    }
+}
+
+pub struct SparseIndexEntry<'a> {
+    data: &'a mut [u8],
+}
+
+impl<'a> SparseIndexEntry<'a> {
+    pub fn new(data: &'a mut [u8]) -> Self {
+        Self { data: data }
+    }
+
+    pub fn retrieve_key(&self) -> String {
+        // a key max 32 byte, in sparse index, even a key is smaller than 32, extra space is filled with \0
+        // we need to retrive the true key
+        let mut key_end = 0;
+        for &byte in &self.data[0..MAX_KEY_LEN] {
+            if byte == b'\0' {
+                break;
+            }
+            key_end += 1;
+        }
+        String::from_utf8_lossy(&self.data[0..key_end]).to_string()
+    }
+
+    pub fn retrieve_offset(&self) -> u64 {
+        // a value is 8 byte, a u64, but in sparse key index, it occupies 32 bytes, right padding with 0
+        // so we only get the first 8 bytes
+        let offset_data = &self.data[MAX_KEY_LEN..(MAX_KEY_LEN + 8)];
+        let mut offset_bytes = [0 as u8; 8];
+        offset_bytes.copy_from_slice(offset_data);
+        u64::from_le_bytes(offset_bytes)
     }
 }
 
