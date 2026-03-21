@@ -1,6 +1,5 @@
-use std::{default, ops::Range, vec::IntoIter};
+use std::ops::Range;
 
-use crate::types::Offset;
 use anyhow::{Result, bail};
 
 // Disk file layout:
@@ -20,7 +19,7 @@ pub const DATA_BLOCK_OFFSET_META_OFFSET_BYTES: usize = 8; // u64
 // the length of metadata at the start of a log file, must fit into one block
 pub const META_DATA_BYTE_LEN: usize =
     INDEX_BLOCK_OFFSET_META_OFFSET_BYTES + DATA_BLOCK_OFFSET_META_OFFSET_BYTES;
-pub const SPARSE_INDEX_START_OFFSET: usize = META_DATA_BYTE_LEN;
+// pub const SPARSE_INDEX_START_OFFSET: usize = META_DATA_BYTE_LEN;
 
 // byte layout of a single pair of KV: [key_len] [val_len] [key] [val]
 // key_len_len defines the byte size of key_len, limit the maximum length of byte in key
@@ -42,15 +41,11 @@ pub const SPARSE_INDEX_COUNT_PER_BLOCK: usize = BLOCK_SIZE_BYTES / SPARSE_INDEX_
 pub struct Layout {}
 
 impl Layout {
-    pub fn new() -> Self {
-        Self {}
-    }
-
     pub fn build(kvs: impl Iterator<Item = (String, String)>) -> Result<Vec<Blocks>> {
         // write data blocks
         let mut data_blocks = Blocks::new();
         let mut first_keys_of_blocks: Vec<String> = vec![];
-        let mut data = [0 as u8; SPARSE_INDEX_ENTRY_BYTE_LEN];
+        let mut data = [0_u8; SPARSE_INDEX_ENTRY_BYTE_LEN];
         let mut kv_entry = Entry::new(&mut data);
         for (k, v) in kvs {
             let size = kv_entry.populate_with_key_val(k.as_bytes(), v.as_bytes())?;
@@ -63,14 +58,14 @@ impl Layout {
 
         let data_block_count = data_blocks.inner.len() as u64;
         let mut index_block_count = data_block_count / SPARSE_INDEX_COUNT_PER_BLOCK as u64;
-        if data_block_count % SPARSE_INDEX_COUNT_PER_BLOCK as u64 != 0 {
+        if !data_block_count.is_multiple_of(SPARSE_INDEX_COUNT_PER_BLOCK as u64) {
             index_block_count += 1;
         }
-        let meta_block_count = 1 as u64;
+        let meta_block_count = 1_u64;
 
         // write index blocks
         let mut index_blocks = Blocks::new();
-        let mut index_data = [0 as u8; SPARSE_INDEX_ENTRY_BYTE_LEN];
+        let mut index_data = [0_u8; SPARSE_INDEX_ENTRY_BYTE_LEN];
         for (i, start_key) in first_keys_of_blocks.iter().enumerate() {
             let mut cur_idx = 0;
 
@@ -96,7 +91,7 @@ impl Layout {
 
         // write meta data block
         let mut meta_block = Blocks::new();
-        let mut meta_data = [0 as u8; META_DATA_BYTE_LEN];
+        let mut meta_data = [0_u8; META_DATA_BYTE_LEN];
         // write index block offset
         let index_offset_in_log: [u8; INDEX_BLOCK_OFFSET_META_OFFSET_BYTES] =
             (meta_block_count * BLOCK_SIZE_BYTES as u64).to_le_bytes();
@@ -111,7 +106,7 @@ impl Layout {
             .copy_from_slice(&data_offset_in_log[..]);
         meta_block.write(&meta_data);
 
-        return Ok(vec![meta_block, index_blocks, data_blocks]);
+        Ok(vec![meta_block, index_blocks, data_blocks])
     }
 }
 
@@ -155,7 +150,7 @@ impl Blocks {
     //  - false: no new block is allocated
     pub fn write(&mut self, data: &[u8]) -> bool {
         let mut new_block_created = false;
-        if self.inner.len() == 0 || BLOCK_SIZE_BYTES - self.current_idx_in_block < data.len() {
+        if self.inner.is_empty() || BLOCK_SIZE_BYTES - self.current_idx_in_block < data.len() {
             self.inner.push(Block::new());
             self.current_block_idx += 1;
             self.current_idx_in_block = 0;
@@ -165,7 +160,7 @@ impl Blocks {
             self.inner[self.current_block_idx as usize].inner[self.current_idx_in_block] = byte;
             self.current_idx_in_block += 1;
         }
-        return new_block_created;
+        new_block_created
     }
 }
 
@@ -175,11 +170,7 @@ pub struct Entry<'a> {
 
 impl<'a> Entry<'a> {
     pub fn new(data: &'a mut [u8]) -> Self {
-        Self { data: data }
-    }
-
-    fn key_len_range() -> Range<usize> {
-        0..KEY_LEN_BYTES
+        Self { data }
     }
 
     fn val_len_range() -> Range<usize> {
@@ -238,18 +229,7 @@ impl<'a> Entry<'a> {
         let key = &self.data[Self::key_range(key_len)];
         let val = &self.data[Self::val_range(key_len, val_len)];
 
-        Some((
-            key,
-            val,
-            (key_len + val_len) as usize + KEY_LEN_BYTES + VAL_LEN_BYTES,
-        ))
-    }
-
-    // get the length of the whole entry = key_len + val_len + key + val
-    // if none -> data not valid as a kv entry
-    pub fn retieve_entry_len(&self) -> Option<usize> {
-        let (key_len, val_len) = self.retrive_meta()?;
-        Some(key_len + val_len + KEY_LEN_BYTES + VAL_LEN_BYTES)
+        Some((key, val, key_len + val_len + KEY_LEN_BYTES + VAL_LEN_BYTES))
     }
 }
 
@@ -259,13 +239,13 @@ pub struct MetaData<'a> {
 
 impl<'a> MetaData<'a> {
     pub fn new(data: &'a mut [u8]) -> Self {
-        Self { data: data }
+        Self { data }
     }
 
     pub fn retrieve_sparse_index_block_start_offset(&self) -> u64 {
         let offset_data = &self.data[INDEX_BLOCK_OFFSET_META_OFFSET
             ..(INDEX_BLOCK_OFFSET_META_OFFSET + INDEX_BLOCK_OFFSET_META_OFFSET_BYTES)];
-        let mut index_offset_bytes = [0 as u8; INDEX_BLOCK_OFFSET_META_OFFSET_BYTES];
+        let mut index_offset_bytes = [0_u8; INDEX_BLOCK_OFFSET_META_OFFSET_BYTES];
         index_offset_bytes.copy_from_slice(offset_data);
         u64::from_le_bytes(index_offset_bytes)
     }
@@ -273,7 +253,7 @@ impl<'a> MetaData<'a> {
     pub fn retrieve_data_block_start_offset(&self) -> u64 {
         let data_offset_data = &self.data[DATA_BLOCK_OFFSET_META_OFFSET
             ..(DATA_BLOCK_OFFSET_META_OFFSET + DATA_BLOCK_OFFSET_META_OFFSET_BYTES)];
-        let mut data_offset_bytes = [0 as u8; DATA_BLOCK_OFFSET_META_OFFSET_BYTES];
+        let mut data_offset_bytes = [0_u8; DATA_BLOCK_OFFSET_META_OFFSET_BYTES];
         data_offset_bytes.copy_from_slice(data_offset_data);
         u64::from_le_bytes(data_offset_bytes)
     }
@@ -285,7 +265,7 @@ pub struct SparseIndexEntry<'a> {
 
 impl<'a> SparseIndexEntry<'a> {
     pub fn new(data: &'a mut [u8]) -> Self {
-        Self { data: data }
+        Self { data }
     }
 
     // key may not exist because key len is zero
@@ -309,63 +289,8 @@ impl<'a> SparseIndexEntry<'a> {
         // a value is 8 byte, a u64, but in sparse key index, it occupies 32 bytes, right padding with 0
         // so we only get the first 8 bytes
         let offset_data = &self.data[MAX_KEY_LEN..(MAX_KEY_LEN + 8)];
-        let mut offset_bytes = [0 as u8; 8];
+        let mut offset_bytes = [0_u8; 8];
         offset_bytes.copy_from_slice(offset_data);
         u64::from_le_bytes(offset_bytes)
-    }
-}
-
-#[derive(Default)]
-pub struct Len {
-    pub inner: [u8; 2],
-}
-
-impl Len {
-    pub fn new() -> Self {
-        Self { inner: [0; 2] }
-    }
-
-    pub fn to_usize(&self) -> usize {
-        u16::from_le_bytes(self.inner) as usize
-    }
-
-    pub fn to_u64(&self) -> u64 {
-        u16::from_le_bytes(self.inner) as u64
-    }
-
-    pub fn len(&self) -> usize {
-        self.inner.len()
-    }
-}
-
-pub struct LenVal {
-    pub len: Len,
-    pub val: Vec<u8>,
-}
-
-impl LenVal {
-    pub fn new() -> Self {
-        Self {
-            len: Len::new(),
-            val: vec![],
-        }
-    }
-
-    pub fn get_string(&self) -> String {
-        String::from_utf8_lossy(&self.val).to_string()
-    }
-}
-
-#[derive(Default)]
-pub struct KeyValueMeta {
-    pub key_len: u64,
-    pub val_len: u64,
-    pub key_offset: Offset,
-    pub val_offset: Offset,
-}
-
-impl KeyValueMeta {
-    pub fn new() -> Self {
-        Self::default()
     }
 }

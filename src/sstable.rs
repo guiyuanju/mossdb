@@ -1,6 +1,5 @@
 use crate::reader::CachedReader;
-use crate::sparseindex::{self, SparseIndex};
-use crate::types::{Key, Offset, Value};
+use crate::sparseindex::SparseIndex;
 use anyhow::Result;
 use anyhow::anyhow;
 
@@ -18,7 +17,7 @@ impl SSTable {
         let sparseindex = SparseIndex::new(index);
         Ok(Self {
             sparse_index: sparseindex,
-            reader: reader,
+            reader,
             filename,
         })
     }
@@ -30,9 +29,5 @@ impl SSTable {
             .ok_or(anyhow!("not found in current sstable"))?;
 
         self.reader.read_key(block_offset, key)
-    }
-
-    pub fn len(&self) -> usize {
-        todo!()
     }
 }

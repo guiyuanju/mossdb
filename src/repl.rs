@@ -55,7 +55,7 @@ impl Repl {
     }
 
     fn process_line(&mut self, line: &[&str]) {
-        if line.len() == 0 {
+        if line.is_empty() {
             return;
         }
         match line[0] {

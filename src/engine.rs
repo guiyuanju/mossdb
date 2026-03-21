@@ -2,15 +2,15 @@ use anyhow::{Context, Result, anyhow, bail};
 use log::info;
 use std::{
     cell::RefCell,
-    fs::{self, OpenOptions},
-    path::{Path, PathBuf},
+    fs::{self},
+    path::PathBuf,
     thread,
 };
 
 use crate::{
-    layout::{self, LOG_FILE_EXT, MEMTABLE_MAX_SIZE_BYTES},
+    layout::{LOG_FILE_EXT, MEMTABLE_MAX_SIZE_BYTES},
     memtable::MemTable,
-    sstable::{self, SSTable},
+    sstable::SSTable,
     writer::Writer,
 };
 
@@ -40,7 +40,7 @@ impl Engine {
 
         for entry in fs::read_dir(&path).context("cannot open log dir")? {
             let path = entry?.path();
-            if path.is_file() && path.extension().map_or(false, |ext| ext == "log") {
+            if path.is_file() && path.extension().is_some_and(|ext| ext == "log") {
                 info!("Reading log file {}", path.to_str().unwrap());
                 logs.push(path);
             }
@@ -109,7 +109,7 @@ impl Engine {
             }
         }
 
-        return Err(anyhow!("value not found"));
+        Err(anyhow!("value not found"))
     }
 
     // delete key, the tombstone value is an empty byte array

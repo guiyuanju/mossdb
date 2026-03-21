@@ -6,10 +6,6 @@ use anyhow::Result;
 pub struct Writer {}
 
 impl Writer {
-    pub fn new() -> Self {
-        Self {}
-    }
-
     pub fn write(memtable: MemTable, filename: String) -> Result<()> {
         let mut file = OpenOptions::new()
             .write(true)

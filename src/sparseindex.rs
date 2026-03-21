@@ -1,4 +1,4 @@
-use crate::{reader::CachedReader, types::Offset};
+use crate::types::Offset;
 
 #[derive(Debug)]
 pub struct SparseIndex {
@@ -20,7 +20,7 @@ impl SparseIndex {
                 if idx == 0 {
                     return None;
                 }
-                return Some(self.index[idx - 1].1);
+                Some(self.index[idx - 1].1)
             }
         }
     }

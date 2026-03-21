@@ -1,6 +1,4 @@
-use std::collections::btree_map::Iter;
 use std::collections::{BTreeMap, btree_map};
-use std::iter::Iterator;
 
 #[derive(Debug)]
 pub struct MemTable {
@@ -21,15 +19,15 @@ impl MemTable {
     }
 
     pub fn set(&mut self, key: String, value: String) {
-        let key_len = key.as_bytes().len();
-        let val_len = value.as_bytes().len();
+        let key_len = key.len();
+        let val_len = value.len();
         match self.store.insert(key, value) {
             None => {
                 self.byte_size += key_len;
                 self.byte_size += val_len;
             }
             Some(old) => {
-                self.byte_size -= old.as_bytes().len();
+                self.byte_size -= old.len();
                 self.byte_size += val_len;
             }
         }

@@ -10,6 +10,7 @@ mod repl;
 mod sparseindex;
 mod sstable;
 mod types;
+mod versionset;
 mod writer;
 
 #[cfg(test)]

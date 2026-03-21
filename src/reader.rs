@@ -3,12 +3,9 @@ use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom};
 
 use crate::layout::{
-    BLOCK_SIZE_BYTES, Block, Entry, KEY_LEN_BYTES, KeyValueMeta, Len, MetaData,
-    SPARSE_INDEX_COUNT_PER_BLOCK, SPARSE_INDEX_ENTRY_BYTE_LEN, SPARSE_INDEX_START_OFFSET,
-    SparseIndexEntry, VAL_LEN_BYTES,
+    BLOCK_SIZE_BYTES, Block, Entry, MetaData, SPARSE_INDEX_COUNT_PER_BLOCK,
+    SPARSE_INDEX_ENTRY_BYTE_LEN, SparseIndexEntry,
 };
-use crate::sparseindex::SparseIndex;
-use crate::types::{Key, Offset};
 
 #[derive(Debug)]
 pub struct CachedReader {
@@ -24,7 +21,7 @@ impl CachedReader {
             cached_block: Block::new(),
             has_data_in_cache: false,
             block_offset: 0,
-            filename: filename,
+            filename,
         }
     }
 
@@ -37,7 +34,7 @@ impl CachedReader {
             self.block_offset = block_offset;
         }
 
-        let mut cur = 0 as usize;
+        let mut cur = 0_usize;
         while cur < self.cached_block.len() {
             let entry = Entry::new(&mut self.cached_block.inner[cur..]);
             let Some((k, v, entry_len)) = entry.retrive_kv() else {
