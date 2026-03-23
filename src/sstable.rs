@@ -13,8 +13,8 @@ pub struct SSTable {
 }
 
 impl SSTable {
-    pub fn new(filename: String) -> Result<Self> {
-        let mut reader = CachedReader::new(filename.clone());
+    pub fn new(filename: &str) -> Result<Self> {
+        let mut reader = CachedReader::new(filename.to_string());
         let index = reader.read_sparse_index()?;
         let sparseindex = SparseIndex::new(index);
         Ok(Self {

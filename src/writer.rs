@@ -6,7 +6,7 @@ use anyhow::Result;
 pub struct Writer {}
 
 impl Writer {
-    pub fn write(memtable: &MemTable, filename: String) -> Result<()> {
+    pub fn write(memtable: &MemTable, filename: &str) -> Result<()> {
         let mut file = OpenOptions::new()
             .write(true)
             .create(true)

@@ -12,6 +12,7 @@ mod sstable;
 mod types;
 mod versionset;
 mod writer;
+mod flush;
 
 #[cfg(test)]
 mod tests {

@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, anyhow, bail};
 use log::{Level, log};
+use std::fmt;
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom};
 
@@ -8,7 +9,6 @@ use crate::layout::{
     SPARSE_INDEX_ENTRY_BYTE_LEN, SparseIndexEntry,
 };
 
-#[derive(Debug)]
 pub struct CachedReader {
     cached_block: Block,
     has_data_in_cache: bool, // TODO: rmv flag, use some type safe way, unsafe may needed
@@ -93,5 +93,16 @@ impl CachedReader {
             .context("failed to read block")?;
         self.has_data_in_cache = true;
         Ok(())
+    }
+}
+
+impl fmt::Debug for CachedReader {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CachedReader")
+            .field("cached_block", &"hidden for less space")
+            .field("has_data_in_cache", &self.has_data_in_cache)
+            .field("block_offset", &self.block_offset)
+            .field("filename", &self.filename)
+            .finish()
     }
 }

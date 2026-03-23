@@ -11,6 +11,7 @@ use std::{
 use uuid::Uuid;
 
 use crate::{
+    flush::Flush,
     layout::{LOG_FILE_EXT, MEMTABLE_MAX_SIZE_BYTES},
     memtable::{self, MemTable},
     sstable::SSTable,
@@ -22,31 +23,32 @@ use crate::{
 pub struct Engine {
     pub version: RwLock<Arc<Version>>,
     pub memtable: Mutex<MemTable>, // TODO: use concurrent data structure for better performance
-    pub sstables_dir: PathBuf,
+    pub sstables_dir: String,
     flush_tx: mpsc::Sender<Arc<MemTable>>,
 }
 
 impl Engine {
-    pub fn new(path: PathBuf) -> Self {
+    pub fn new(path: &str) -> Arc<Engine> {
         let (flush_tx, flush_rx) = mpsc::channel();
 
-        thread::spawn(move || {
-            loop {
-                let memtable: Arc<MemTable> = flush_rx.recv().unwrap();
-
-                let filename = Self::next_log_file_name();
-                if let Err(err) = Writer::write(memtable.as_ref(), filename) {
-                    log!(Level::Error, "error when flushing memtable: {}", err);
-                }
-            }
-        });
-
-        Self {
+        let mut engine = Self {
             version: RwLock::new(Arc::new(Version::new())),
             memtable: Mutex::new(MemTable::new()),
-            sstables_dir: path,
+            sstables_dir: path.to_string(),
             flush_tx,
-        }
+        };
+
+        // load all logs to sstable
+        engine.open_log_dir(&path);
+
+        // start flush thread
+        let engine = Arc::new(engine);
+        let cloned = engine.clone();
+        thread::spawn(move || {
+            Flush::new(flush_rx, cloned).start_loop();
+        });
+
+        engine
     }
 
     pub fn open_log_dir(&mut self, dir: &str) -> Result<()> {
@@ -70,7 +72,7 @@ impl Engine {
         let mut sstables: Vec<Arc<SSTable>> = vec![];
         for log in logs {
             let file = log.to_string_lossy().to_string();
-            sstables.push(Arc::new(SSTable::new(file)?));
+            sstables.push(Arc::new(SSTable::new(&file)?));
         }
 
         let mut new_version = Version::new();
@@ -78,14 +80,7 @@ impl Engine {
         let mut current = self.version.write().unwrap();
         *current = Arc::new(new_version);
 
-        self.sstables_dir = path;
-
         Ok(())
-    }
-
-    fn next_log_file_name() -> String {
-        let name = Uuid::now_v7().to_string();
-        format!("{}.{}", name, LOG_FILE_EXT)
     }
 
     // set key value, append to log, udpate hash, grow if neccessary
@@ -105,17 +100,21 @@ impl Engine {
             // optimistic lock is more performant
             // and cloning and push cost time when the vector is long
             // a simple mutex will block read operation for a long time
-            let version = self.version.read().unwrap().clone();
-            let mut new_version = Version::new();
-            new_version.imm_memtables = version.imm_memtables.clone();
-            new_version.sstables = version.sstables.clone();
-            new_version.imm_memtables.push(old_memtable.clone());
-
-            // compare and set
             loop {
+                let mut version_ptr = std::ptr::null();
+                // cheap read lock
+                let mut new_version = {
+                    // put version in a block to realease the read lock upon block end
+                    let version = self.version.read().unwrap().clone();
+                    version_ptr = version.as_ref();
+                    (*version).clone()
+                };
+                new_version.imm_memtables.push(old_memtable.clone());
+
+                // write lock with cheap operation
                 let mut guard = self.version.write().unwrap();
                 let current_version = Arc::clone(&guard);
-                if std::ptr::eq(current_version.as_ref(), version.as_ref()) {
+                if std::ptr::eq(current_version.as_ref(), version_ptr) {
                     *guard = Arc::new(new_version);
                     break;
                 }
@@ -152,7 +151,7 @@ impl Engine {
     }
 
     // delete key, the tombstone value is an empty byte array
-    pub fn del(&mut self, key: &str) {
+    pub fn del(&self, key: &str) {
         todo!()
     }
 

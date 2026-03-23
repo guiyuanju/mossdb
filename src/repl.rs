@@ -1,6 +1,7 @@
 use std::{
     io::{self, Write},
     path::PathBuf,
+    sync::Arc,
 };
 
 use crate::engine::Engine;
@@ -8,21 +9,14 @@ use anyhow::Result;
 use log::error;
 
 pub struct Repl {
-    engine: Engine,
+    engine: Arc<Engine>,
 }
 
 impl Repl {
     pub fn new() -> Self {
-        let mut path = PathBuf::new();
-        path.push("./");
         Self {
-            engine: Engine::new(path),
+            engine: Engine::new("./"),
         }
-    }
-
-    fn open(&mut self, name: &str) -> Result<()> {
-        self.engine.open_log_dir(name)?;
-        Ok(())
     }
 
     fn process_cmd(&mut self, cmd: &str, args: &[&str]) {
@@ -64,13 +58,6 @@ impl Repl {
             return;
         }
         match line[0] {
-            "open" => {
-                if line.len() != 2 {
-                    println!("expect a path to a directory");
-                    return;
-                }
-                let _ = self.open(line[1]).map_err(|e| println!("{:?}", e));
-            }
             cmd => {
                 self.process_cmd(cmd, &line[1..]);
             }

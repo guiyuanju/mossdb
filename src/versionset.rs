@@ -16,3 +16,12 @@ impl Version {
         }
     }
 }
+
+impl Clone for Version {
+    fn clone(&self) -> Self {
+        Self {
+            imm_memtables: self.imm_memtables.clone(),
+            sstables: self.sstables.clone(),
+        }
+    }
+}
