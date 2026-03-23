@@ -28,6 +28,8 @@ pub const KEY_LEN_BYTES: usize = 1; // 5 bits, use 1 byte to store physically, 3
 pub const VAL_LEN_BYTES: usize = 2; // 10 bits, use 2 bytes to store, 1 KB max value size, combined with key, if fully stored, max use ~4TB space
 pub const MAX_KEY_LEN: usize = 32; // a key max 32 bytes, used to limit at runtime
 pub const MAX_VAL_LEN: usize = 1024; // a val max 1024 bytes, used to limit at runtime
+pub const MAX_KEY_VAL_ENTRY_BYTE_LEN: usize =
+    KEY_LEN_BYTES + VAL_LEN_BYTES + MAX_KEY_LEN + MAX_VAL_LEN;
 
 // use u64 for the offset in the log
 // u64 has 8 bytes, but we use 32 bytes to store it
@@ -40,19 +42,19 @@ pub const SPARSE_INDEX_COUNT_PER_BLOCK: usize = BLOCK_SIZE_BYTES / SPARSE_INDEX_
 
 pub struct Layout {}
 
-impl Layout {
-    pub fn build(kvs: impl Iterator<Item = (String, String)>) -> Result<Vec<Blocks>> {
+impl<'a> Layout {
+    pub fn build(kvs: impl Iterator<Item = (&'a String, &'a String)>) -> Result<Vec<Blocks>> {
         // write data blocks
         let mut data_blocks = Blocks::new();
         let mut first_keys_of_blocks: Vec<String> = vec![];
-        let mut data = [0_u8; SPARSE_INDEX_ENTRY_BYTE_LEN];
+        let mut data = [0_u8; MAX_KEY_VAL_ENTRY_BYTE_LEN];
         let mut kv_entry = Entry::new(&mut data);
         for (k, v) in kvs {
             let size = kv_entry.populate_with_key_val(k.as_bytes(), v.as_bytes())?;
 
             let is_in_new_block = data_blocks.write(&kv_entry.data[0..size]);
             if is_in_new_block {
-                first_keys_of_blocks.push(k);
+                first_keys_of_blocks.push(k.to_string());
             }
         }
 
