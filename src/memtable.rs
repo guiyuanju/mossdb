@@ -43,12 +43,12 @@ impl MemTable {
     }
 }
 
-impl IntoIterator for MemTable {
-    type Item = (String, String);
+impl<'a> IntoIterator for &'a MemTable {
+    type Item = (&'a String, &'a String);
 
-    type IntoIter = btree_map::IntoIter<String, String>;
+    type IntoIter = btree_map::Iter<'a, String, String>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.store.into_iter()
+        self.store.iter()
     }
 }
