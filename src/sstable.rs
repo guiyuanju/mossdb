@@ -1,3 +1,6 @@
+use std::sync::Mutex;
+use std::sync::RwLock;
+
 use crate::reader::CachedReader;
 use crate::sparseindex::SparseIndex;
 use anyhow::Result;
@@ -6,8 +9,7 @@ use anyhow::anyhow;
 #[derive(Debug)]
 pub struct SSTable {
     sparse_index: SparseIndex,
-    reader: CachedReader,
-    pub filename: String,
+    reader: Mutex<CachedReader>,
 }
 
 impl SSTable {
@@ -17,17 +19,17 @@ impl SSTable {
         let sparseindex = SparseIndex::new(index);
         Ok(Self {
             sparse_index: sparseindex,
-            reader,
-            filename,
+            reader: Mutex::new(reader),
         })
     }
 
-    pub fn get(&mut self, key: &str) -> Result<String> {
+    pub fn get(&self, key: &str) -> Result<String> {
         let block_offset = self
             .sparse_index
             .get_containing_block_offset(key)
             .ok_or(anyhow!("not found in current sstable"))?;
 
-        self.reader.read_key(block_offset, key)
+        let mut reader = self.reader.lock().unwrap();
+        reader.read_key(block_offset, key)
     }
 }

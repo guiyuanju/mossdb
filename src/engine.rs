@@ -1,32 +1,51 @@
 use anyhow::{Context, Result, anyhow, bail};
-use log::info;
+use log::{Level, info, log};
 use std::{
     cell::RefCell,
     fs::{self},
-    path::PathBuf,
+    mem,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, RwLock, mpsc},
     thread,
 };
+use uuid::Uuid;
 
 use crate::{
     layout::{LOG_FILE_EXT, MEMTABLE_MAX_SIZE_BYTES},
-    memtable::MemTable,
+    memtable::{self, MemTable},
     sstable::SSTable,
+    versionset::Version,
     writer::Writer,
 };
 
 #[derive(Debug)]
 pub struct Engine {
-    pub memtable: RefCell<MemTable>,
-    pub sstables: Vec<SSTable>,
+    pub version: RwLock<Arc<Version>>,
+    pub memtable: Mutex<MemTable>, // TODO: use concurrent data structure for better performance
     pub sstables_dir: PathBuf,
+    flush_tx: mpsc::Sender<Arc<MemTable>>,
 }
 
 impl Engine {
-    pub fn new() -> Self {
+    pub fn new(path: PathBuf) -> Self {
+        let (flush_tx, flush_rx) = mpsc::channel();
+
+        thread::spawn(move || {
+            loop {
+                let memtable: Arc<MemTable> = flush_rx.recv().unwrap();
+
+                let filename = Self::next_log_file_name();
+                if let Err(err) = Writer::write(memtable.as_ref(), filename) {
+                    log!(Level::Error, "error when flushing memtable: {}", err);
+                }
+            }
+        });
+
         Self {
-            memtable: RefCell::new(MemTable::new()),
-            sstables: vec![],
-            sstables_dir: PathBuf::new(),
+            version: RwLock::new(Arc::new(Version::new())),
+            memtable: Mutex::new(MemTable::new()),
+            sstables_dir: path,
+            flush_tx,
         }
     }
 
@@ -48,62 +67,82 @@ impl Engine {
 
         logs.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
 
+        let mut sstables: Vec<Arc<SSTable>> = vec![];
         for log in logs {
             let file = log.to_string_lossy().to_string();
-            self.sstables.push(SSTable::new(file)?);
+            sstables.push(Arc::new(SSTable::new(file)?));
         }
+
+        let mut new_version = Version::new();
+        new_version.sstables = sstables;
+        let mut current = self.version.write().unwrap();
+        *current = Arc::new(new_version);
 
         self.sstables_dir = path;
 
         Ok(())
     }
 
-    fn next_log_file_name(&self) -> Result<String> {
-        if !self.sstables_dir.is_dir() {
-            bail!("please open a directory");
-        }
-
-        let name = match self.sstables.last() {
-            None => "0".to_string(),
-            Some(latest) => {
-                let mut path = PathBuf::new();
-                path.push(&latest.filename);
-                let name = path.file_stem().unwrap().to_str().unwrap().to_string();
-                let num: u64 = name.parse().unwrap();
-                (num + 1).to_string()
-            }
-        };
-
-        Ok(format!("{}.{}", name, LOG_FILE_EXT))
+    fn next_log_file_name() -> String {
+        let name = Uuid::now_v7().to_string();
+        format!("{}.{}", name, LOG_FILE_EXT)
     }
 
     // set key value, append to log, udpate hash, grow if neccessary
-    pub fn set(&mut self, key: String, value: String) {
-        self.memtable.borrow_mut().set(key, value);
-        if self.memtable.borrow().byte_size() as u64 >= MEMTABLE_MAX_SIZE_BYTES {
-            let old_memtable = self.memtable.replace(MemTable::new());
-            // flush the full memtable in a new thread
-            // TODO: make flush thread long running and notify main thread when finishing
-            let filename = self.next_log_file_name();
-            thread::spawn(move || {
-                match filename {
-                    Err(err) => println!("failed when next log file name: {}", err),
-                    Ok(filename) => {
-                        _ = Writer::write(old_memtable, filename)
-                            .map_err(|err| println!("failed to write {}", err));
-                    }
-                };
-            });
+    pub fn set(&self, key: String, value: String) {
+        let mut memtable = self.memtable.lock().unwrap();
+
+        memtable.set(key, value);
+
+        if memtable.byte_size() as u64 >= MEMTABLE_MAX_SIZE_BYTES {
+            // replace full memtable with a new one
+            let old_memtable = mem::replace(&mut *memtable, MemTable::new());
+            let old_memtable = Arc::new(old_memtable);
+
+            // install the full memtable to the newest version
+            // use optimistic lock: cmpare and set
+            // reason: full memtable installation is rare compare to read operation
+            // optimistic lock is more performant
+            // and cloning and push cost time when the vector is long
+            // a simple mutex will block read operation for a long time
+            let version = self.version.read().unwrap().clone();
+            let mut new_version = Version::new();
+            new_version.imm_memtables = version.imm_memtables.clone();
+            new_version.sstables = version.sstables.clone();
+            new_version.imm_memtables.push(old_memtable.clone());
+
+            // compare and set
+            loop {
+                let mut guard = self.version.write().unwrap();
+                let current_version = Arc::clone(&guard);
+                if std::ptr::eq(current_version.as_ref(), version.as_ref()) {
+                    *guard = Arc::new(new_version);
+                    break;
+                }
+            }
+
+            // notify flush thread
+            self.flush_tx.send(old_memtable.clone());
         }
     }
 
     // get value, check hash to find offset in log
-    pub fn get(&mut self, key: &str) -> Result<String> {
-        if let Some(res) = self.memtable.borrow().get(key) {
+    pub fn get(&self, key: &str) -> Result<String> {
+        let memtable = self.memtable.lock().unwrap();
+        if let Some(res) = memtable.get(key) {
             return Ok(res);
         }
 
-        for t in self.sstables.iter_mut().rev() {
+        let version = self.version.read().unwrap();
+        let version = Arc::clone(&version);
+
+        for m in version.imm_memtables.iter().rev() {
+            if let Some(res) = m.get(key) {
+                return Ok(res);
+            }
+        }
+
+        for t in version.sstables.iter().rev() {
             if let Ok(res) = t.get(key) {
                 return Ok(res);
             }
@@ -117,8 +156,13 @@ impl Engine {
         todo!()
     }
 
-    pub fn dump(&mut self) {
-        println!("memtable = {:?}", self.memtable);
-        println!("sstables = {:?}", self.sstables);
+    pub fn dump(&self) {
+        let memtable = self.memtable.lock().unwrap();
+        println!("memtable = {:?}", memtable);
+
+        let version = self.version.read().unwrap();
+        let version = Arc::new(&version);
+        println!("immutable memtables = {:?}", version.imm_memtables);
+        println!("sstables = {:?}", version.sstables);
     }
 }

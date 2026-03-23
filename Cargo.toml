@@ -7,3 +7,10 @@ edition = "2024"
 log = "0.4"
 env_logger = "0.10"
 anyhow = "1.0.100"
+
+[dependencies.uuid]
+version = "1.22.0"
+# Lets you generate random UUIDs
+features = [
+    "v7",
+]

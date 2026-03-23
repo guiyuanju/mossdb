@@ -1,4 +1,7 @@
-use std::io::{self, Write};
+use std::{
+    io::{self, Write},
+    path::PathBuf,
+};
 
 use crate::engine::Engine;
 use anyhow::Result;
@@ -10,8 +13,10 @@ pub struct Repl {
 
 impl Repl {
     pub fn new() -> Self {
+        let mut path = PathBuf::new();
+        path.push("./");
         Self {
-            engine: Engine::new(),
+            engine: Engine::new(path),
         }
     }
 
@@ -64,7 +69,7 @@ impl Repl {
                     println!("expect a path to a directory");
                     return;
                 }
-                let _ = self.open(line[1]).map_err(|e| println!("{}", e));
+                let _ = self.open(line[1]).map_err(|e| println!("{:?}", e));
             }
             cmd => {
                 self.process_cmd(cmd, &line[1..]);

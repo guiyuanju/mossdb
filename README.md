@@ -2,6 +2,8 @@
 
 <img width="100" alt="mossdb" src="./resources/logo.png" />
 
+![](./resources/arch.png)
+
 - [ ] update the final architechture
 - [ ] the current arch
 - [ ] road map & todos

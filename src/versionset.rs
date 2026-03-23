@@ -1,10 +1,18 @@
-pub struct VersionSet {
-    pub latest: Version,
-}
+use std::sync::{Arc, RwLock};
 
+use crate::{memtable::MemTable, sstable::SSTable};
+
+#[derive(Debug)]
 pub struct Version {
-    // immutable_memtables: Vec<Rc<MemTable>>,
-    // sstables:
+    pub imm_memtables: Vec<Arc<MemTable>>,
+    pub sstables: Vec<Arc<SSTable>>,
 }
 
-// current version = const memtables + sstables
+impl Version {
+    pub fn new() -> Self {
+        Self {
+            imm_memtables: vec![],
+            sstables: vec![],
+        }
+    }
+}

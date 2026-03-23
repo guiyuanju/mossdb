@@ -1,4 +1,5 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
+use log::{Level, log};
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom};
 
