@@ -3,16 +3,15 @@ use std::env;
 use std::io;
 
 mod engine;
+mod flush;
 mod layout;
 mod memtable;
 mod reader;
 mod repl;
 mod sparseindex;
 mod sstable;
-mod types;
 mod versionset;
 mod writer;
-mod flush;
 
 #[cfg(test)]
 mod tests {

@@ -1,12 +1,10 @@
-use crate::types::Offset;
-
 #[derive(Debug)]
 pub struct SparseIndex {
-    index: Vec<(String, Offset)>,
+    index: Vec<(String, u64)>,
 }
 
 impl SparseIndex {
-    pub fn new(index: Vec<(String, Offset)>) -> Self {
+    pub fn new(index: Vec<(String, u64)>) -> Self {
         Self { index }
     }
 
