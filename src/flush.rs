@@ -1,17 +1,8 @@
-use log::{Level, error, info, log};
-use std::{
-    mem,
-    sync::{Arc, mpsc},
-};
-use uuid::Uuid;
+use log::{error, info};
+use std::sync::{Arc, mpsc};
 
 use crate::{
-    common::next_log_file_name,
-    engine::Engine,
-    layout::LOG_FILE_EXT,
-    memtable::MemTable,
-    sstable::{self, SSTable},
-    versionset::Version,
+    common::next_log_file_name, engine::Engine, memtable::MemTable, sstable::SSTable,
     writer::Writer,
 };
 
@@ -55,7 +46,7 @@ impl Flush {
                 Ok(sstable) => {
                     self.install_new_version(&memtable, sstable);
                     info!("new version installed after flushing");
-                    self.compact_tx.send(true);
+                    let _ = self.compact_tx.send(true);
                     info!("trigger message sent to compact thread");
                 }
             }

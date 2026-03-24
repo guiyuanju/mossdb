@@ -1,13 +1,12 @@
-use anyhow::{Context, Result, anyhow, bail};
-use log::{Level, log};
+use anyhow::{Context, Result, bail};
 use std::fmt;
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::MetadataExt;
 
 use crate::layout::{
-    BLOCK_SIZE_BYTES, Block, KVBlockIter, KVEntryReader, KVEntryWriter, MetaData,
-    SPARSE_INDEX_COUNT_PER_BLOCK, SPARSE_INDEX_ENTRY_BYTE_LEN, SparseIndexEntry,
+    BLOCK_SIZE_BYTES, Block, KVBlockIter, MetaData, SPARSE_INDEX_COUNT_PER_BLOCK,
+    SPARSE_INDEX_ENTRY_BYTE_LEN, SparseIndexEntry,
 };
 
 pub struct CachedReader {
@@ -27,7 +26,7 @@ impl CachedReader {
         }
     }
 
-    pub fn kv_block_iter(&mut self, block_offset: u64) -> Result<KVBlockIter> {
+    pub fn kv_block_iter(&mut self, block_offset: u64) -> Result<KVBlockIter<'_>> {
         if !self.has_data_in_cache || self.block_offset != block_offset {
             self.load_block_to_cache(block_offset)?;
             self.block_offset = block_offset;

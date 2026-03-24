@@ -61,7 +61,7 @@ impl<'a> IntoIterator for &'a MemTable {
 
     fn into_iter(self) -> Self::IntoIter {
         fn clone_pair((k, v): (&String, &(String, bool))) -> (String, String, bool) {
-            (k.clone(), v.0.clone(), v.1.clone())
+            (k.clone(), v.0.clone(), v.1)
         }
 
         self.store.iter().map(clone_pair)

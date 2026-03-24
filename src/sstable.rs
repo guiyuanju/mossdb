@@ -1,23 +1,10 @@
 use std::fs;
-use std::fs::File;
-use std::fs::OpenOptions;
-use std::io::Read;
-use std::io::Seek;
-use std::io::SeekFrom;
 use std::sync::Mutex;
-use std::sync::RwLock;
 
-use crate::layout::BLOCK_SIZE_BYTES;
-use crate::layout::Block;
-use crate::layout::KVBlockIter;
-use crate::layout::KVEntryReader;
 use crate::reader::CachedReader;
-use crate::sparseindex;
 use crate::sparseindex::SparseIndex;
-use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
-use anyhow::bail;
 use log::error;
 use log::info;
 
@@ -65,7 +52,7 @@ impl SSTable {
 
     pub fn dump(&self) {
         let mut guard = self.reader.lock().unwrap();
-        for (key, offset) in &self.sparse_index.index {
+        for (_, offset) in &self.sparse_index.index {
             for (k, v, deleted) in guard.kv_block_iter(*offset).unwrap() {
                 println!("key = `{}`, val = `{}`, deleted = {}", k, v, deleted);
             }

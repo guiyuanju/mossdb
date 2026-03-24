@@ -3,8 +3,6 @@ use log::{error, info};
 use std::{
     fs::{File, OpenOptions},
     io::{Read, Seek, SeekFrom},
-    os::unix::fs::MetadataExt,
-    path::PathBuf,
     sync::{Arc, mpsc},
 };
 
@@ -12,7 +10,7 @@ use crate::{
     common::next_log_file_name,
     engine::Engine,
     layout::{BLOCK_SIZE_BYTES, Block, KVEntryReader},
-    sparseindex::{self, SparseIndex},
+    sparseindex::SparseIndex,
     sstable::SSTable,
     writer::Writer,
 };
@@ -66,7 +64,7 @@ impl Compact {
     }
 
     fn install_new_version(&self, from: &[String], to: &str) -> Result<()> {
-        let sstable = Arc::new(SSTable::new(to.clone())?);
+        let sstable = Arc::new(SSTable::new(to)?);
         loop {
             // read version and release lock
             let mut version_ptr = std::ptr::null();
@@ -146,15 +144,15 @@ impl Compact {
             ];
         }
         if version.sstables[*idx - 1].file_size < version.sstables[*idx + 1].file_size {
-            return vec![
+            vec![
                 Arc::clone(&version.sstables[*idx]),
                 Arc::clone(&version.sstables[*idx - 1]),
-            ];
+            ]
         } else {
-            return vec![
+            vec![
                 Arc::clone(&version.sstables[*idx + 1]),
                 Arc::clone(&version.sstables[*idx]),
-            ];
+            ]
         }
     }
 
@@ -190,8 +188,7 @@ impl Iterator for SSTableMergeIterator {
             self.loaded = true;
         }
 
-        let res = self.retrieve_next_not_deleted_unique_smallest();
-        res
+        self.retrieve_next_not_deleted_unique_smallest()
     }
 }
 
@@ -239,7 +236,7 @@ impl SSTableMergeIterator {
             cur = self.retrieve_smallest()?;
         }
         self.prev = Some(cur.0.clone());
-        return Some(cur);
+        Some(cur)
     }
 
     // find the smallest, retrieve next

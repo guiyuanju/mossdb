@@ -1,28 +1,20 @@
 use anyhow::{Context, Result, anyhow, bail};
-use log::{Level, info, log};
+use log::info;
 use std::{
-    cell::RefCell,
-    fs::{self, OpenOptions, read_to_string, remove_file},
+    fs::{self, OpenOptions, read_to_string},
     io::Write,
     mem,
-    path::{Path, PathBuf},
-    process::Command,
+    path::PathBuf,
     sync::{
         Arc, Mutex, RwLock,
-        mpsc::{self, Receiver, Sender},
+        mpsc::{self},
     },
     thread,
 };
-use uuid::Uuid;
 
 use crate::{
-    compact::Compact,
-    flush::Flush,
-    layout::{DELETED_FLAG_BYTES, LOG_FILE_EXT, MEMTABLE_MAX_SIZE_BYTES},
-    memtable::{self, MemTable},
-    sstable::SSTable,
-    versionset::Version,
-    writer::Writer,
+    compact::Compact, flush::Flush, layout::MEMTABLE_MAX_SIZE_BYTES, memtable::MemTable,
+    sstable::SSTable, versionset::Version,
 };
 
 const METADATA_FILE: &str = "mossdb_metadata";
@@ -48,7 +40,7 @@ impl Engine {
         };
 
         // load all logs to sstable
-        engine.open_log_dir(&path)?;
+        engine.open_log_dir(path)?;
 
         // start flush thread
         let engine = Arc::new(engine);
@@ -81,7 +73,7 @@ impl Engine {
             self.write_metadata_file(cloned);
             return Ok(());
         }
-        return Err(anyhow!("previous version has changed, please try again"));
+        Err(anyhow!("previous version has changed, please try again"))
     }
 
     fn write_metadata_file(&self, version: Arc<Version>) {
@@ -137,7 +129,7 @@ impl Engine {
         res.lines().map(|s| s.to_string()).collect::<Vec<String>>()
     }
 
-    pub fn open_log_dir(&mut self, dir: &str) -> Result<()> {
+    pub fn open_log_dir(&mut self, _: &str) -> Result<()> {
         let logs = self.list_sorted_log_files()?;
 
         let mut sstables: Vec<Arc<SSTable>> = vec![];

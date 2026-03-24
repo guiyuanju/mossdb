@@ -129,9 +129,9 @@ impl Block {
         self.inner.len()
     }
 
-    pub fn kv_iter(&self) -> KVBlockIter {
+    pub fn kv_iter(&self) -> KVBlockIter<'_> {
         KVBlockIter {
-            block: &self,
+            block: self,
             offset: 0,
         }
     }
@@ -149,7 +149,7 @@ impl<'a> Iterator for KVBlockIter<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         let cur = self.get_next()?;
         // if find zero length key, means there are no more kv in the remianing space of the block
-        if cur.0.len() == 0 {
+        if cur.0.is_empty() {
             return None;
         }
         Some(cur)

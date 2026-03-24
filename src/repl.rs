@@ -1,11 +1,9 @@
 use std::{
     io::{self, Write},
-    path::PathBuf,
     sync::Arc,
 };
 
 use crate::engine::Engine;
-use anyhow::Result;
 use log::error;
 
 pub struct Repl {
@@ -56,11 +54,8 @@ impl Repl {
         if line.is_empty() {
             return;
         }
-        match line[0] {
-            cmd => {
-                self.process_cmd(cmd, &line[1..]);
-            }
-        }
+        let cmd: &str = line[0];
+        self.process_cmd(cmd, &line[1..]);
     }
 
     pub fn run(&mut self) {

@@ -1,6 +1,6 @@
 use std::{fs::OpenOptions, io::Write};
 
-use crate::{layout::Layout, memtable::MemTable};
+use crate::layout::Layout;
 use anyhow::Result;
 
 pub struct Writer {}
