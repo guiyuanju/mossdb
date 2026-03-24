@@ -85,10 +85,11 @@ impl Flush {
             // add sstable
             new_version.sstables.push(sstable.clone());
 
-            let mut guard = self.engine.version.write().unwrap();
-            let current_version = guard.clone();
-            if std::ptr::eq(current_version.as_ref(), version_ptr) {
-                *guard = Arc::new(new_version);
+            if self
+                .engine
+                .install_new_version(version_ptr, Arc::new(new_version))
+                .is_ok()
+            {
                 break;
             }
         }

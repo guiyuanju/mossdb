@@ -63,6 +63,21 @@ impl Engine {
         Ok(engine)
     }
 
+    // previous_version: compare and swap, used to compare
+    pub fn install_new_version(
+        &self,
+        previous_version: *const Version,
+        new_version: Arc<Version>,
+    ) -> Result<()> {
+        let mut guard = self.version.write().unwrap();
+        let current_version = guard.clone();
+        if std::ptr::eq(current_version.as_ref(), previous_version) {
+            *guard = new_version;
+            return Ok(());
+        }
+        Err(anyhow!("previous version has changed, please try again"))
+    }
+
     pub fn list_sorted_log_files(&self) -> Result<Vec<PathBuf>> {
         let mut logs = vec![];
         let mut path = PathBuf::new();

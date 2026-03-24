@@ -92,10 +92,11 @@ impl Compact {
             let new_version_sstable_len = new_version.sstables.len();
             assert!(new_version.sstables.len() < version_sstable_len);
 
-            let mut guard = self.engine.version.write().unwrap();
-            let current_version = guard.clone();
-            if std::ptr::eq(current_version.as_ref(), version_ptr) {
-                *guard = Arc::new(new_version);
+            if self
+                .engine
+                .install_new_version(version_ptr, Arc::new(new_version))
+                .is_ok()
+            {
                 info!(
                     "new version installed after compaction, old version sstable size = {}, new version sstable size = {}",
                     version_sstable_len, new_version_sstable_len,
