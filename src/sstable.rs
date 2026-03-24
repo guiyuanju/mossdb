@@ -1,3 +1,4 @@
+use std::fs;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::Read;
@@ -17,13 +18,24 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
+use log::info;
 
 #[derive(Debug)]
 pub struct SSTable {
     pub sparse_index: SparseIndex,
     reader: Mutex<CachedReader>, // TODO: remove mutex, lock free data structure? each read thread create its own cache?
-    file_size: u64,
+    pub file_size: u64,
     pub filename: String,
+}
+
+impl Drop for SSTable {
+    fn drop(&mut self) {
+        info!(
+            "removeing sstable files {} in drop, res: {:?}",
+            self.filename,
+            fs::remove_file(&self.filename)
+        );
+    }
 }
 
 impl SSTable {

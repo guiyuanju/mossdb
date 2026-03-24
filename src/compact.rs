@@ -43,24 +43,112 @@ impl Compact {
             let res_file = self.compact(sstables);
             match res_file {
                 Err(err) => error!("failed to compact files {:?}, error: {:?}", filenames, err),
-                Ok(res) => info!("compacted files {:?} to {:?}", filenames, res),
+                Ok(res) => {
+                    info!("compacted files {:?} to {:?}", filenames, res);
+                    if let Err(err) = self.install_new_version(&filenames, &res) {
+                        error!("failed to install new version after compaction: {:?}", err);
+                    } else {
+                        info!("installed new version after compaction");
+                    }
+                }
             }
         }
     }
 
+    fn install_new_version(&self, from: &[String], to: &str) -> Result<()> {
+        let sstable = Arc::new(SSTable::new(to.clone())?);
+        loop {
+            // read version and release lock
+            let mut version_ptr = std::ptr::null();
+            let mut version_sstable_len = 0;
+            let mut new_version = {
+                let version = self.engine.version.read().unwrap();
+                version_ptr = version.as_ref();
+                version_sstable_len = version.sstables.len();
+                let version = Arc::clone(&version);
+                (*version).clone()
+            };
+
+            // remove compacted sstables with the result sstable
+            let first_replaced_idx = new_version
+                .sstables
+                .iter()
+                .position(|s| from.contains(&s.filename))
+                .unwrap();
+            new_version.sstables.retain(|s| !from.contains(&s.filename));
+            new_version
+                .sstables
+                .insert(first_replaced_idx, Arc::clone(&sstable));
+            let new_version_sstable_len = new_version.sstables.len();
+            assert!(new_version.sstables.len() < version_sstable_len);
+
+            let mut guard = self.engine.version.write().unwrap();
+            let current_version = guard.clone();
+            if std::ptr::eq(current_version.as_ref(), version_ptr) {
+                *guard = Arc::new(new_version);
+                info!(
+                    "new version installed after compaction, old version sstable size = {}, new version sstable size = {}",
+                    version_sstable_len, new_version_sstable_len,
+                );
+                return Ok(());
+            }
+        }
+    }
+
+    // TODO: improve this method, too many arc clone
+    // current strategy: get the smallest two adjavent sstables
     fn get_sstables_to_compact(&self) -> Vec<Arc<SSTable>> {
         let guard = self.engine.version.read().unwrap();
         let version = Arc::clone(&guard);
         if version.sstables.len() < 5 {
             return vec![];
         }
-        let res: Vec<Arc<SSTable>> = version
+
+        let mut sorted = version
             .sstables
             .iter()
-            .take(2)
-            .map(|sstable| Arc::clone(sstable))
-            .collect();
-        res
+            .enumerate()
+            .map(|(idx, s)| (idx, s.filename.clone(), s.file_size, Arc::clone(s)))
+            .collect::<Vec<(usize, String, u64, Arc<SSTable>)>>();
+        sorted.sort_by_cached_key(|(_, _, size, _)| *size);
+        let (idx, filename, size, sstable) = &sorted[0];
+
+        // add the smaller neighbor of the smallest one
+        let mut neighbors = vec![(*idx, filename, *size, Arc::clone(sstable))];
+        if *idx == 0 {
+            neighbors.push((
+                1,
+                &version.sstables[1].filename,
+                version.sstables[1].file_size,
+                Arc::clone(&version.sstables[1]),
+            ));
+        } else if *idx == sorted.len() - 1 {
+            let idx = sorted.len() - 2;
+            neighbors.push((
+                idx,
+                &version.sstables[idx].filename,
+                version.sstables[idx].file_size,
+                Arc::clone(&version.sstables[idx]),
+            ));
+        } else {
+            let prev = idx - 1;
+            let next = idx + 1;
+            neighbors.push((
+                prev,
+                &version.sstables[prev].filename,
+                version.sstables[prev].file_size,
+                Arc::clone(&version.sstables[prev]),
+            ));
+            neighbors.push((
+                next,
+                &version.sstables[next].filename,
+                version.sstables[next].file_size,
+                Arc::clone(&version.sstables[next]),
+            ));
+        }
+        neighbors.sort_by_key(|(_, _, size, _)| *size);
+
+        vec![Arc::clone(&neighbors[0].3), Arc::clone(&neighbors[1].3)]
     }
 
     fn compact(&self, sstables: Vec<Arc<SSTable>>) -> Result<String> {
