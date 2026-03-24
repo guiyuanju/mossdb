@@ -39,7 +39,7 @@ impl Flush {
         loop {
             let memtable: Arc<MemTable> = self.rx.recv().unwrap();
 
-            let filename = next_log_file_name();
+            let filename = next_log_file_name(&self.engine.sstables_dir);
             if let Err(err) = Writer::write(memtable.into_iter(), &filename) {
                 error!("error when flushing memtable: {:?}", err);
                 continue;

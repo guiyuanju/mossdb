@@ -2,7 +2,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use log::{Level, info, log};
 use std::{
     cell::RefCell,
-    fs::{self},
+    fs::{self, OpenOptions, read_to_string, remove_file},
+    io::Write,
     mem,
     path::{Path, PathBuf},
     process::Command,
@@ -23,6 +24,8 @@ use crate::{
     versionset::Version,
     writer::Writer,
 };
+
+const METADATA_FILE: &str = "mossdb_metadata";
 
 #[derive(Debug)]
 pub struct Engine {
@@ -72,10 +75,32 @@ impl Engine {
         let mut guard = self.version.write().unwrap();
         let current_version = guard.clone();
         if std::ptr::eq(current_version.as_ref(), previous_version) {
+            let cloned = Arc::clone(&new_version);
             *guard = new_version;
+            self.write_metadata_file(cloned);
             return Ok(());
         }
-        Err(anyhow!("previous version has changed, please try again"))
+        return Err(anyhow!("previous version has changed, please try again"));
+    }
+
+    fn write_metadata_file(&self, version: Arc<Version>) {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .create(true)
+            .open(METADATA_FILE)
+            .unwrap();
+        let mut meta = vec![];
+        for s in &version.sstables {
+            let mut path = PathBuf::new();
+            path.push(s.filename.clone());
+            let filename = path.file_name().unwrap().to_string_lossy().to_string();
+            meta.push(filename.clone());
+        }
+        for l in meta {
+            file.write_fmt(format_args!("{}\n", l)).unwrap();
+        }
+        info!("metadata file written");
     }
 
     pub fn list_sorted_log_files(&self) -> Result<Vec<PathBuf>> {
@@ -86,17 +111,31 @@ impl Engine {
             bail!("not a directory");
         }
 
+        let filenames = self.read_from_metadata_file();
+
         for entry in fs::read_dir(&path).context("cannot open log dir")? {
             let path = entry?.path();
             if path.is_file() && path.extension().is_some_and(|ext| ext == "log") {
-                info!("listing log file {}", path.to_str().unwrap());
-                logs.push(path);
+                let filename = path.file_name().unwrap().to_string_lossy().to_string();
+                info!("listing log file {}", filename);
+                if filenames.contains(&filename) {
+                    info!("recognizing {} in newest version", filename);
+                    logs.push(path);
+                } else {
+                    info!("{} is in newest version, deleted", filename);
+                    remove_file(path).unwrap();
+                }
             }
         }
 
         logs.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
 
         Ok(logs)
+    }
+
+    fn read_from_metadata_file(&self) -> Vec<String> {
+        let res = read_to_string(METADATA_FILE).unwrap();
+        res.lines().map(|s| s.to_string()).collect::<Vec<String>>()
     }
 
     pub fn open_log_dir(&mut self, dir: &str) -> Result<()> {

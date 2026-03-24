@@ -172,7 +172,7 @@ impl Compact {
 
     fn compact(&self, sstables: Vec<Arc<SSTable>>) -> Result<String> {
         let merge_iter = SSTableMergeIterator::new(sstables)?;
-        let filename = next_log_file_name();
+        let filename = next_log_file_name(&self.engine.sstables_dir);
         Writer::write(merge_iter, &filename)?;
         Ok(filename)
     }
