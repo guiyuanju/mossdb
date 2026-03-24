@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use log::{error, info};
 use std::{
     fs::{File, OpenOptions},
@@ -32,24 +32,34 @@ impl Compact {
         loop {
             let _ = self.rx.recv();
             info!("compact thread received trigger message, try to find and compact files");
-            let sstables = self.get_sstables_to_compact();
-            if sstables.len() < 2 {
-                info!("less than 2 sstables for compaction found, skip");
-                continue;
+            while self.get_sstable_size() > 4 {
+                let sstables = self.get_sstables_to_compact();
+                if sstables.len() < 2 {
+                    info!("less than 2 sstables for compaction found, skip");
+                    break;
+                }
+                info!("found {} sstables to compact", sstables.len());
+                if let Err(err) = self.try_compact(sstables) {
+                    error!("try compact error: {:?}", err);
+                    break;
+                }
             }
-            info!("found {} sstables to compact", sstables.len());
-            let filenames: Vec<String> = sstables.iter().map(|s| s.filename.clone()).collect();
-            info!("compacting files: {:?}", filenames);
-            let res_file = self.compact(sstables);
-            match res_file {
-                Err(err) => error!("failed to compact files {:?}, error: {:?}", filenames, err),
-                Ok(res) => {
-                    info!("compacted files {:?} to {:?}", filenames, res);
-                    if let Err(err) = self.install_new_version(&filenames, &res) {
-                        error!("failed to install new version after compaction: {:?}", err);
-                    } else {
-                        info!("installed new version after compaction");
-                    }
+        }
+    }
+
+    fn try_compact(&self, sstables: Vec<Arc<SSTable>>) -> Result<()> {
+        let filenames: Vec<String> = sstables.iter().map(|s| s.filename.clone()).collect();
+        info!("compacting files: {:?}", filenames);
+        let res_file = self.compact(sstables);
+        match res_file {
+            Err(err) => bail!("failed to compact files {:?}, error: {:?}", filenames, err),
+            Ok(res) => {
+                info!("compacted files {:?} to {:?}", filenames, res);
+                if let Err(err) = self.install_new_version(&filenames, &res) {
+                    bail!("failed to install new version after compaction: {:?}", err);
+                } else {
+                    info!("installed new version after compaction");
+                    Ok(())
                 }
             }
         }
@@ -95,12 +105,19 @@ impl Compact {
         }
     }
 
+    fn get_sstable_size(&self) -> usize {
+        let guard = self.engine.version.read().unwrap();
+        let version = Arc::clone(&guard);
+        version.sstables.len()
+    }
+
     // TODO: improve this method, too many arc clone
     // current strategy: get the smallest two adjavent sstables
     fn get_sstables_to_compact(&self) -> Vec<Arc<SSTable>> {
         let guard = self.engine.version.read().unwrap();
         let version = Arc::clone(&guard);
-        if version.sstables.len() < 5 {
+
+        if version.sstables.len() < 2 {
             return vec![];
         }
 
@@ -111,6 +128,7 @@ impl Compact {
             .map(|(idx, s)| (idx, s.filename.clone(), s.file_size, Arc::clone(s)))
             .collect::<Vec<(usize, String, u64, Arc<SSTable>)>>();
         sorted.sort_by_cached_key(|(_, _, size, _)| *size);
+
         let (idx, filename, size, sstable) = &sorted[0];
 
         // add the smaller neighbor of the smallest one
