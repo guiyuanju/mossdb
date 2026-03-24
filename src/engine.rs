@@ -206,7 +206,7 @@ impl Engine {
 
     /// flush immedieately to disk
     pub fn flush(&self) {
-        self.flush_if(|_| true);
+        self.flush_if(|m| m.byte_size() > 0);
     }
 
     /// flush current memtable immediately to disk if predicate is true
