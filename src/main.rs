@@ -40,6 +40,7 @@ fn main() -> io::Result<()> {
     Ok(())
 }
 
+// FIXME: after compaction, value lost
 // TODO: use version set, flush thread write sstable, then add a new version, then swap the lastest version
 // TODO: add compaction thread
 // TODO: use immutable memtable queue and a mutable current memtable + multiple flush threads
