@@ -6,14 +6,17 @@ use anyhow::Result;
 pub struct Writer {}
 
 impl Writer {
-    pub fn write(memtable: &MemTable, filename: &str) -> Result<()> {
+    pub fn write(
+        memtable: impl IntoIterator<Item = (String, String)>,
+        filename: &str,
+    ) -> Result<()> {
         let mut file = OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
             .open(filename)?;
 
-        let blocks_chain = Layout::build(memtable.into_iter())?;
+        let blocks_chain = Layout::build(memtable)?;
 
         for blocks in blocks_chain {
             for block in blocks.inner {

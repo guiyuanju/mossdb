@@ -42,14 +42,14 @@ pub const SPARSE_INDEX_COUNT_PER_BLOCK: usize = BLOCK_SIZE_BYTES / SPARSE_INDEX_
 
 pub struct Layout {}
 
-impl<'a> Layout {
-    pub fn build(kvs: impl Iterator<Item = (&'a String, &'a String)>) -> Result<Vec<Blocks>> {
+impl Layout {
+    pub fn build(kvs: impl IntoIterator<Item = (String, String)>) -> Result<Vec<Blocks>> {
         // write data blocks
         let mut data_blocks = Blocks::new();
         let mut first_keys_of_blocks: Vec<String> = vec![];
         let mut data = [0_u8; MAX_KEY_VAL_ENTRY_BYTE_LEN];
-        let mut kv_entry = Entry::new(&mut data);
-        for (k, v) in kvs {
+        let mut kv_entry = KVEntryWriter::new(&mut data);
+        for (k, v) in kvs.into_iter() {
             let size = kv_entry.populate_with_key_val(k.as_bytes(), v.as_bytes())?;
 
             let is_in_new_block = data_blocks.write(&kv_entry.data[0..size]);
@@ -112,7 +112,7 @@ impl<'a> Layout {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Block {
     pub inner: [u8; BLOCK_SIZE_BYTES],
 }
@@ -126,6 +126,36 @@ impl Block {
 
     pub fn len(&self) -> usize {
         self.inner.len()
+    }
+
+    pub fn kv_iter(&self) -> KVBlockIter {
+        KVBlockIter {
+            block: &self,
+            offset: 0,
+        }
+    }
+}
+
+// iterator for block storing KV data
+pub struct KVBlockIter<'a> {
+    block: &'a Block,
+    offset: usize,
+}
+
+impl<'a> Iterator for KVBlockIter<'a> {
+    type Item = (String, String);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.offset >= self.block.len() {
+            return None;
+        }
+        let kv_entry = KVEntryReader::new(&self.block.inner[self.offset..]);
+        let (k, v, lenght) = kv_entry.retrive_kv()?;
+        self.offset += lenght;
+        Some((
+            String::from_utf8_lossy(k).to_string(),
+            String::from_utf8_lossy(v).to_string(),
+        ))
     }
 }
 
@@ -166,11 +196,62 @@ impl Blocks {
     }
 }
 
-pub struct Entry<'a> {
+pub struct KVEntryReader<'a> {
+    pub data: &'a [u8],
+}
+
+impl<'a> KVEntryReader<'a> {
+    pub fn new(data: &'a [u8]) -> Self {
+        Self { data }
+    }
+
+    fn val_len_range() -> Range<usize> {
+        KEY_LEN_BYTES..(KEY_LEN_BYTES + VAL_LEN_BYTES)
+    }
+
+    fn key_range(key_len: usize) -> Range<usize> {
+        (KEY_LEN_BYTES + VAL_LEN_BYTES)..(KEY_LEN_BYTES + VAL_LEN_BYTES + key_len)
+    }
+
+    fn val_range(key_len: usize, val_len: usize) -> Range<usize> {
+        let val_offset = KEY_LEN_BYTES + VAL_LEN_BYTES + key_len;
+        val_offset..(val_offset + val_len)
+    }
+
+    // return Option<(key_len, val_len)>
+    // if none -> current data doesn't has enough lenght of data to be interpreted as meta
+    fn retrive_meta(&self) -> Option<(usize, usize)> {
+        if KEY_LEN_BYTES + VAL_LEN_BYTES > self.data.len() {
+            return None;
+        }
+        let key_len = self.data[0] as usize;
+        let mut val_len_bytes: [u8; VAL_LEN_BYTES] = [0; VAL_LEN_BYTES];
+        val_len_bytes[..].copy_from_slice(&self.data[Self::val_len_range()]);
+        let val_len = u16::from_le_bytes(val_len_bytes) as usize;
+
+        Some((key_len, val_len))
+    }
+
+    // if none -> data is not valid as a kv entry
+    // e.g. not long enough, possible passed in the empty space at the end of a block
+    /// return Option<key, value, lenght of entry = key_len + value_len + meta_len>
+    pub fn retrive_kv(&'a self) -> Option<(&'a [u8], &'a [u8], usize)> {
+        let (key_len, val_len) = self.retrive_meta()?;
+        if key_len + val_len + KEY_LEN_BYTES + VAL_LEN_BYTES > self.data.len() {
+            return None;
+        }
+        let key = &self.data[Self::key_range(key_len)];
+        let val = &self.data[Self::val_range(key_len, val_len)];
+
+        Some((key, val, key_len + val_len + KEY_LEN_BYTES + VAL_LEN_BYTES))
+    }
+}
+
+pub struct KVEntryWriter<'a> {
     pub data: &'a mut [u8],
 }
 
-impl<'a> Entry<'a> {
+impl<'a> KVEntryWriter<'a> {
     pub fn new(data: &'a mut [u8]) -> Self {
         Self { data }
     }
@@ -204,34 +285,6 @@ impl<'a> Entry<'a> {
         self.data[Self::val_len_range()].copy_from_slice(&val_len_bytes);
         self.data[Self::val_range(key.len(), val.len())].copy_from_slice(val);
         Ok(KEY_LEN_BYTES + VAL_LEN_BYTES + key.len() + val.len())
-    }
-
-    // return Option<(key_len, val_len)>
-    // if none -> current data doesn't has enough lenght of data to be interpreted as meta
-    fn retrive_meta(&self) -> Option<(usize, usize)> {
-        if KEY_LEN_BYTES + VAL_LEN_BYTES > self.data.len() {
-            return None;
-        }
-        let key_len = self.data[0] as usize;
-        let mut val_len_bytes: [u8; VAL_LEN_BYTES] = [0; VAL_LEN_BYTES];
-        val_len_bytes[..].copy_from_slice(&self.data[Self::val_len_range()]);
-        let val_len = u16::from_le_bytes(val_len_bytes) as usize;
-
-        Some((key_len, val_len))
-    }
-
-    // if none -> data is not valid as a kv entry
-    // e.g. not long enough, possible passed in the empty space at the end of a block
-    /// return Option<key, value, lenght of entry = key_len + value_len + meta_len>
-    pub fn retrive_kv(&'a self) -> Option<(&'a [u8], &'a [u8], usize)> {
-        let (key_len, val_len) = self.retrive_meta()?;
-        if key_len + val_len + KEY_LEN_BYTES + VAL_LEN_BYTES > self.data.len() {
-            return None;
-        }
-        let key = &self.data[Self::key_range(key_len)];
-        let val = &self.data[Self::val_range(key_len, val_len)];
-
-        Some((key, val, key_len + val_len + KEY_LEN_BYTES + VAL_LEN_BYTES))
     }
 }
 

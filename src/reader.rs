@@ -3,10 +3,11 @@ use log::{Level, log};
 use std::fmt;
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom};
+use std::os::unix::fs::MetadataExt;
 
 use crate::layout::{
-    BLOCK_SIZE_BYTES, Block, Entry, MetaData, SPARSE_INDEX_COUNT_PER_BLOCK,
-    SPARSE_INDEX_ENTRY_BYTE_LEN, SparseIndexEntry,
+    BLOCK_SIZE_BYTES, Block, KVBlockIter, KVEntryReader, KVEntryWriter, MetaData,
+    SPARSE_INDEX_COUNT_PER_BLOCK, SPARSE_INDEX_ENTRY_BYTE_LEN, SparseIndexEntry,
 };
 
 pub struct CachedReader {
@@ -26,18 +27,28 @@ impl CachedReader {
         }
     }
 
+    pub fn kv_block_iter(&mut self, block_offset: u64) -> Result<KVBlockIter> {
+        if !self.has_data_in_cache || self.block_offset != block_offset {
+            self.load_block_to_cache(block_offset)?;
+            self.block_offset = block_offset;
+        }
+        Ok(self.cached_block.kv_iter())
+    }
+
+    pub fn get_file_size(&self) -> Result<u64> {
+        let file = OpenOptions::new().read(true).open(&self.filename)?;
+        Ok(file.metadata()?.size())
+    }
+
     pub fn read_key(&mut self, block_offset: u64, key: &str) -> Result<String> {
-        if !self.has_data_in_cache
-            || self.block_offset > block_offset
-            || block_offset >= self.block_offset + self.cached_block.len() as u64
-        {
+        if !self.has_data_in_cache || self.block_offset != block_offset {
             self.load_block_to_cache(block_offset)?;
             self.block_offset = block_offset;
         }
 
         let mut cur = 0_usize;
         while cur < self.cached_block.len() {
-            let entry = Entry::new(&mut self.cached_block.inner[cur..]);
+            let entry = KVEntryReader::new(&self.cached_block.inner[cur..]);
             let Some((k, v, entry_len)) = entry.retrive_kv() else {
                 break;
             };

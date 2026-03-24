@@ -5,12 +5,17 @@ use std::{
     fs::{self},
     mem,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, RwLock, mpsc},
+    process::Command,
+    sync::{
+        Arc, Mutex, RwLock,
+        mpsc::{self, Receiver, Sender},
+    },
     thread,
 };
 use uuid::Uuid;
 
 use crate::{
+    compact::Compact,
     flush::Flush,
     layout::{LOG_FILE_EXT, MEMTABLE_MAX_SIZE_BYTES},
     memtable::{self, MemTable},
@@ -28,8 +33,9 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub fn new(path: &str) -> Arc<Engine> {
+    pub fn new(path: &str) -> Result<Arc<Engine>> {
         let (flush_tx, flush_rx) = mpsc::channel();
+        let (compact_tx, compact_rx) = mpsc::channel();
 
         let mut engine = Self {
             version: RwLock::new(Arc::new(Version::new())),
@@ -39,22 +45,28 @@ impl Engine {
         };
 
         // load all logs to sstable
-        engine.open_log_dir(&path);
+        engine.open_log_dir(&path)?;
 
         // start flush thread
         let engine = Arc::new(engine);
         let cloned = engine.clone();
         thread::spawn(move || {
-            Flush::new(flush_rx, cloned).start_loop();
+            Flush::new(cloned, flush_rx, compact_tx).start_loop();
         });
 
-        engine
+        // start compaction thread
+        let cloned = engine.clone();
+        thread::spawn(move || {
+            Compact::new(cloned, compact_rx).start_loop();
+        });
+
+        Ok(engine)
     }
 
-    pub fn open_log_dir(&mut self, dir: &str) -> Result<()> {
+    pub fn list_sorted_log_files(&self) -> Result<Vec<PathBuf>> {
         let mut logs = vec![];
         let mut path = PathBuf::new();
-        path.push(dir);
+        path.push(&self.sstables_dir);
         if !path.is_dir() {
             bail!("not a directory");
         }
@@ -62,12 +74,18 @@ impl Engine {
         for entry in fs::read_dir(&path).context("cannot open log dir")? {
             let path = entry?.path();
             if path.is_file() && path.extension().is_some_and(|ext| ext == "log") {
-                info!("Reading log file {}", path.to_str().unwrap());
+                info!("listing log file {}", path.to_str().unwrap());
                 logs.push(path);
             }
         }
 
         logs.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
+
+        Ok(logs)
+    }
+
+    pub fn open_log_dir(&mut self, dir: &str) -> Result<()> {
+        let logs = self.list_sorted_log_files()?;
 
         let mut sstables: Vec<Arc<SSTable>> = vec![];
         for log in logs {

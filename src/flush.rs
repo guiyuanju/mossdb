@@ -6,6 +6,7 @@ use std::{
 use uuid::Uuid;
 
 use crate::{
+    common::next_log_file_name,
     engine::Engine,
     layout::LOG_FILE_EXT,
     memtable::MemTable,
@@ -15,21 +16,31 @@ use crate::{
 };
 
 pub struct Flush {
-    rx: mpsc::Receiver<Arc<MemTable>>,
     engine: Arc<Engine>,
+    rx: mpsc::Receiver<Arc<MemTable>>,
+    compact_tx: mpsc::Sender<bool>,
 }
 
 impl Flush {
-    pub fn new(rx: mpsc::Receiver<Arc<MemTable>>, engine: Arc<Engine>) -> Self {
-        Self { rx, engine }
+    pub fn new(
+        engine: Arc<Engine>,
+        rx: mpsc::Receiver<Arc<MemTable>>,
+        compact_tx: mpsc::Sender<bool>,
+    ) -> Self {
+        Self {
+            rx,
+            engine,
+            compact_tx,
+        }
     }
 
     pub fn start_loop(&self) {
+        info!("flush thread started");
         loop {
             let memtable: Arc<MemTable> = self.rx.recv().unwrap();
 
-            let filename = Self::next_log_file_name();
-            if let Err(err) = Writer::write(memtable.as_ref(), &filename) {
+            let filename = next_log_file_name();
+            if let Err(err) = Writer::write(memtable.into_iter(), &filename) {
                 error!("error when flushing memtable: {:?}", err);
                 continue;
             }
@@ -43,6 +54,9 @@ impl Flush {
                 }
                 Ok(sstable) => {
                     self.install_new_version(&memtable, sstable);
+                    info!("new version installed after flushing");
+                    self.compact_tx.send(true);
+                    info!("trigger message sent to compact thread");
                 }
             }
         }
@@ -75,14 +89,8 @@ impl Flush {
             let current_version = guard.clone();
             if std::ptr::eq(current_version.as_ref(), version_ptr) {
                 *guard = Arc::new(new_version);
-                info!("new version installed after flushing");
                 break;
             }
         }
-    }
-
-    fn next_log_file_name() -> String {
-        let name = Uuid::now_v7().to_string();
-        format!("{}.{}", name, LOG_FILE_EXT)
     }
 }

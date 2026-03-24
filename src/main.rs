@@ -2,6 +2,8 @@ use crate::repl::Repl;
 use std::env;
 use std::io;
 
+mod common;
+mod compact;
 mod engine;
 mod flush;
 mod layout;

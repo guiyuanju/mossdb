@@ -1,6 +1,6 @@
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SparseIndex {
-    index: Vec<(String, u64)>,
+    pub index: Vec<(String, u64)>,
 }
 
 impl SparseIndex {

@@ -44,11 +44,18 @@ impl MemTable {
 }
 
 impl<'a> IntoIterator for &'a MemTable {
-    type Item = (&'a String, &'a String);
+    type Item = (String, String);
 
-    type IntoIter = btree_map::Iter<'a, String, String>;
+    type IntoIter = std::iter::Map<
+        btree_map::Iter<'a, String, String>,
+        fn((&'a String, &'a String)) -> (String, String),
+    >;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.store.iter()
+        fn clone_pair((k, v): (&String, &String)) -> (String, String) {
+            (k.clone(), v.clone())
+        }
+
+        self.store.iter().map(clone_pair)
     }
 }
