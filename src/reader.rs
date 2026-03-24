@@ -40,23 +40,12 @@ impl CachedReader {
         Ok(file.metadata()?.size())
     }
 
-    pub fn read_key(&mut self, block_offset: u64, key: &str) -> Result<String> {
-        if !self.has_data_in_cache || self.block_offset != block_offset {
-            self.load_block_to_cache(block_offset)?;
-            self.block_offset = block_offset;
-        }
-
-        let mut cur = 0_usize;
-        while cur < self.cached_block.len() {
-            let entry = KVEntryReader::new(&self.cached_block.inner[cur..]);
-            let Some((k, v, entry_len)) = entry.retrive_kv() else {
-                break;
-            };
-            let cur_key = String::from_utf8_lossy(k).to_string();
-            if key == cur_key {
-                return Ok(String::from_utf8_lossy(v).to_string());
+    // (value, deleted)
+    pub fn read_key(&mut self, block_offset: u64, key: &str) -> Result<(String, bool)> {
+        for (k, v, deleted) in self.kv_block_iter(block_offset)? {
+            if k == key {
+                return Ok((v, deleted));
             }
-            cur += entry_len;
         }
 
         // TODO: add a jump array to block to accelerate search speed in one block

@@ -52,7 +52,8 @@ impl SSTable {
         })
     }
 
-    pub fn get(&self, key: &str) -> Result<String> {
+    /// return (value, deleted)
+    pub fn get(&self, key: &str) -> Result<(String, bool)> {
         let block_offset = self
             .sparse_index
             .get_containing_block_offset(key)
@@ -62,57 +63,14 @@ impl SSTable {
         reader.read_key(block_offset, key)
     }
 
-    pub fn cached_iter(&self) -> Result<SSTableCachedIter> {
-        let file = OpenOptions::new().read(true).open(&self.filename)?;
-        Ok(SSTableCachedIter {
-            file,
-            block: Block::new(),
-            block_offset: 0,
-            offset_in_block: 0,
-            filled: false,
-        })
+    pub fn dump(&self) {
+        let mut guard = self.reader.lock().unwrap();
+        for (key, offset) in &self.sparse_index.index {
+            for (k, v, deleted) in guard.kv_block_iter(*offset).unwrap() {
+                println!("key = `{}`, val = `{}`, deleted = {}", k, v, deleted);
+            }
+        }
     }
 }
 
 // a iterator for sstable file owning its own cache
-pub struct SSTableCachedIter {
-    file: File,
-    block: Block,
-    block_offset: usize,
-    offset_in_block: usize,
-    filled: bool,
-}
-
-impl Iterator for SSTableCachedIter {
-    type Item = (String, String);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if !self.filled || self.offset_in_block >= self.block.len() {
-            self.load_next_block().ok()?;
-            self.offset_in_block = 0;
-            self.filled = true;
-        }
-        let kv_reader = KVEntryReader::new(&self.block.inner[self.offset_in_block..]);
-        let (k, v, length) = kv_reader.retrive_kv()?;
-        self.offset_in_block += length;
-        Some((
-            String::from_utf8_lossy(k).to_string(),
-            String::from_utf8_lossy(v).to_string(),
-        ))
-    }
-}
-
-impl SSTableCachedIter {
-    fn load_next_block(&mut self) -> Result<()> {
-        self.block_offset += BLOCK_SIZE_BYTES;
-        self.load_block(self.block_offset)
-    }
-
-    fn load_block(&mut self, offset: usize) -> Result<()> {
-        self.file.seek(SeekFrom::Start(offset as u64))?;
-        self.file
-            .read_exact(&mut self.block.inner[..])
-            .context("failed to read block")?;
-        Ok(())
-    }
-}

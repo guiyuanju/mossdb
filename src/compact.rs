@@ -13,7 +13,7 @@ use crate::{
     engine::Engine,
     layout::{BLOCK_SIZE_BYTES, Block, KVEntryReader},
     sparseindex::{self, SparseIndex},
-    sstable::{SSTable, SSTableCachedIter},
+    sstable::SSTable,
     writer::Writer,
 };
 
@@ -172,13 +172,13 @@ struct SSTableMergeIterator {
     blocks: Vec<Block>,
     block_index: Vec<usize>, // the index inside the sparse index, representing current block
     offset_in_block: Vec<usize>,
-    heads: Vec<Option<(String, String)>>,
+    heads: Vec<Option<(String, String, bool)>>, // key, val, deleted
     loaded: bool,
     prev: Option<String>, // previous outputed key, used to skip value that should be discarded
 }
 
 impl Iterator for SSTableMergeIterator {
-    type Item = (String, String);
+    type Item = (String, String, bool);
 
     fn next(&mut self) -> Option<Self::Item> {
         // initialize
@@ -190,16 +190,8 @@ impl Iterator for SSTableMergeIterator {
             self.loaded = true;
         }
 
-        let mut cur = self.retrieve_smallest()?;
-        if self.prev.is_none() || !self.prev.as_ref().unwrap().eq(&cur.0) {
-            self.prev = Some(cur.0.clone());
-            return Some(cur);
-        }
-        while self.prev.as_ref().unwrap().eq(&cur.0) {
-            cur = self.retrieve_smallest()?;
-        }
-        self.prev = Some(cur.0.clone());
-        return Some(cur);
+        let res = self.retrieve_next_not_deleted_unique_smallest();
+        res
     }
 }
 
@@ -228,8 +220,30 @@ impl SSTableMergeIterator {
         })
     }
 
+    pub fn retrieve_next_not_deleted_unique_smallest(&mut self) -> Option<(String, String, bool)> {
+        let mut cur = self.retrieve_next_unique_smallest()?;
+        // while deleted, skip all deleted value
+        while cur.2 {
+            cur = self.retrieve_next_unique_smallest()?;
+        }
+        Some(cur)
+    }
+
+    pub fn retrieve_next_unique_smallest(&mut self) -> Option<(String, String, bool)> {
+        let mut cur = self.retrieve_smallest()?;
+        if self.prev.is_none() || !self.prev.as_ref().unwrap().eq(&cur.0) {
+            self.prev = Some(cur.0.clone());
+            return Some(cur);
+        }
+        while self.prev.as_ref().unwrap().eq(&cur.0) {
+            cur = self.retrieve_smallest()?;
+        }
+        self.prev = Some(cur.0.clone());
+        return Some(cur);
+    }
+
     // find the smallest, retrieve next
-    pub fn retrieve_smallest(&mut self) -> Option<(String, String)> {
+    pub fn retrieve_smallest(&mut self) -> Option<(String, String, bool)> {
         let min_idx = self
             .heads
             .iter()
@@ -282,10 +296,11 @@ impl SSTableMergeIterator {
             }
         }
         let kv_entry = KVEntryReader::new(&self.blocks[idx].inner[self.offset_in_block[idx]..]);
-        if let Some((k, v, len)) = kv_entry.retrive_kv() {
+        if let Some((k, v, deleted, len)) = kv_entry.retrive_kv() {
             self.heads[idx] = Some((
                 String::from_utf8_lossy(k).to_string(),
                 String::from_utf8_lossy(v).to_string(),
+                deleted,
             ));
             self.offset_in_block[idx] += len;
         } else {

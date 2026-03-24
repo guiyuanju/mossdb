@@ -18,7 +18,7 @@ use uuid::Uuid;
 use crate::{
     compact::Compact,
     flush::Flush,
-    layout::{LOG_FILE_EXT, MEMTABLE_MAX_SIZE_BYTES},
+    layout::{DELETED_FLAG_BYTES, LOG_FILE_EXT, MEMTABLE_MAX_SIZE_BYTES},
     memtable::{self, MemTable},
     sstable::SSTable,
     versionset::Version,
@@ -157,7 +157,7 @@ impl Engine {
     // set key value, append to log, udpate hash, grow if neccessary
     pub fn put(&self, key: String, value: String) {
         self.flush_if(move |m: &mut MemTable| {
-            m.set(key, value);
+            m.put(key, value);
             m.byte_size() as u64 >= MEMTABLE_MAX_SIZE_BYTES
         });
     }
@@ -165,31 +165,43 @@ impl Engine {
     // get value, check hash to find offset in log
     pub fn get(&self, key: &str) -> Result<String> {
         let memtable = self.memtable.lock().unwrap();
-        if let Some(res) = memtable.get(key) {
-            return Ok(res);
+        if let Some((value, deleted)) = memtable.get(key) {
+            if deleted {
+                bail!("key deleted");
+            }
+            return Ok(value);
         }
 
         let version = self.version.read().unwrap();
         let version = Arc::clone(&version);
 
         for m in version.imm_memtables.iter().rev() {
-            if let Some(res) = m.get(key) {
-                return Ok(res);
+            if let Some((value, deleted)) = m.get(key) {
+                if deleted {
+                    bail!("key deleted");
+                }
+                return Ok(value);
             }
         }
 
         for t in version.sstables.iter().rev() {
-            if let Ok(res) = t.get(key) {
-                return Ok(res);
+            if let Ok((val, deleted)) = t.get(key) {
+                if deleted {
+                    bail!("key deleted");
+                }
+                return Ok(val);
             }
         }
 
-        Err(anyhow!("value not found"))
+        Err(anyhow!("key not found"))
     }
 
     // delete key, the tombstone value is an empty byte array
     pub fn del(&self, key: &str) {
-        todo!()
+        self.flush_if(move |m: &mut MemTable| {
+            m.del(key.to_string());
+            m.byte_size() as u64 >= MEMTABLE_MAX_SIZE_BYTES
+        });
     }
 
     /// flush immedieately to disk
@@ -249,5 +261,10 @@ impl Engine {
         let version = Arc::new(&version);
         println!("immutable memtables = {:?}", version.imm_memtables);
         println!("sstables = {:?}", version.sstables);
+
+        for s in &version.sstables {
+            println!("SSTable<{}>", s.filename);
+            s.dump();
+        }
     }
 }

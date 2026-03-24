@@ -21,7 +21,7 @@ impl Repl {
 
     fn process_cmd(&mut self, cmd: &str, args: &[&str]) {
         match cmd {
-            "set" => {
+            "put" => {
                 if args.len() != 2 {
                     println!("expect a key and a value");
                     return;
@@ -36,7 +36,7 @@ impl Repl {
                 if let Ok(v) = self.engine.get(args[0]) {
                     println!("{}", v);
                 } else {
-                    println!("no value found");
+                    println!("key not found");
                 }
             }
             "del" => {

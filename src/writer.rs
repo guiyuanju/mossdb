@@ -7,7 +7,7 @@ pub struct Writer {}
 
 impl Writer {
     pub fn write(
-        memtable: impl IntoIterator<Item = (String, String)>,
+        memtable: impl IntoIterator<Item = (String, String, bool)>,
         filename: &str,
     ) -> Result<()> {
         let mut file = OpenOptions::new()

@@ -26,10 +26,11 @@ pub const META_DATA_BYTE_LEN: usize =
 // val_len_len is similar
 pub const KEY_LEN_BYTES: usize = 1; // 5 bits, use 1 byte to store physically, 32 Byte max key size, around 4 billion unique keys allowed
 pub const VAL_LEN_BYTES: usize = 2; // 10 bits, use 2 bytes to store, 1 KB max value size, combined with key, if fully stored, max use ~4TB space
+pub const DELETED_FLAG_BYTES: usize = 1;
+pub const KV_META_BYTES: usize = KEY_LEN_BYTES + VAL_LEN_BYTES + DELETED_FLAG_BYTES;
 pub const MAX_KEY_LEN: usize = 32; // a key max 32 bytes, used to limit at runtime
 pub const MAX_VAL_LEN: usize = 1024; // a val max 1024 bytes, used to limit at runtime
-pub const MAX_KEY_VAL_ENTRY_BYTE_LEN: usize =
-    KEY_LEN_BYTES + VAL_LEN_BYTES + MAX_KEY_LEN + MAX_VAL_LEN;
+pub const MAX_KEY_VAL_ENTRY_BYTE_LEN: usize = KV_META_BYTES + MAX_KEY_LEN + MAX_VAL_LEN;
 
 // use u64 for the offset in the log
 // u64 has 8 bytes, but we use 32 bytes to store it
@@ -43,14 +44,14 @@ pub const SPARSE_INDEX_COUNT_PER_BLOCK: usize = BLOCK_SIZE_BYTES / SPARSE_INDEX_
 pub struct Layout {}
 
 impl Layout {
-    pub fn build(kvs: impl IntoIterator<Item = (String, String)>) -> Result<Vec<Blocks>> {
+    pub fn build(kvs: impl IntoIterator<Item = (String, String, bool)>) -> Result<Vec<Blocks>> {
         // write data blocks
         let mut data_blocks = Blocks::new();
         let mut first_keys_of_blocks: Vec<String> = vec![];
         let mut data = [0_u8; MAX_KEY_VAL_ENTRY_BYTE_LEN];
         let mut kv_entry = KVEntryWriter::new(&mut data);
-        for (k, v) in kvs.into_iter() {
-            let size = kv_entry.populate_with_key_val(k.as_bytes(), v.as_bytes())?;
+        for (k, v, deleted) in kvs.into_iter() {
+            let size = kv_entry.populate_with_key_val(k.as_bytes(), v.as_bytes(), deleted)?;
 
             let is_in_new_block = data_blocks.write(&kv_entry.data[0..size]);
             if is_in_new_block {
@@ -143,18 +144,30 @@ pub struct KVBlockIter<'a> {
 }
 
 impl<'a> Iterator for KVBlockIter<'a> {
-    type Item = (String, String);
+    type Item = (String, String, bool);
 
     fn next(&mut self) -> Option<Self::Item> {
+        let cur = self.get_next()?;
+        // if find zero length key, means there are no more kv in the remianing space of the block
+        if cur.0.len() == 0 {
+            return None;
+        }
+        Some(cur)
+    }
+}
+
+impl<'a> KVBlockIter<'a> {
+    pub fn get_next(&mut self) -> Option<(String, String, bool)> {
         if self.offset >= self.block.len() {
             return None;
         }
         let kv_entry = KVEntryReader::new(&self.block.inner[self.offset..]);
-        let (k, v, lenght) = kv_entry.retrive_kv()?;
+        let (k, v, deleted, lenght) = kv_entry.retrive_kv()?;
         self.offset += lenght;
         Some((
             String::from_utf8_lossy(k).to_string(),
             String::from_utf8_lossy(v).to_string(),
+            deleted,
         ))
     }
 }
@@ -210,40 +223,41 @@ impl<'a> KVEntryReader<'a> {
     }
 
     fn key_range(key_len: usize) -> Range<usize> {
-        (KEY_LEN_BYTES + VAL_LEN_BYTES)..(KEY_LEN_BYTES + VAL_LEN_BYTES + key_len)
+        (KV_META_BYTES)..(KV_META_BYTES + key_len)
     }
 
     fn val_range(key_len: usize, val_len: usize) -> Range<usize> {
-        let val_offset = KEY_LEN_BYTES + VAL_LEN_BYTES + key_len;
+        let val_offset = KV_META_BYTES + key_len;
         val_offset..(val_offset + val_len)
     }
 
     // return Option<(key_len, val_len)>
     // if none -> current data doesn't has enough lenght of data to be interpreted as meta
-    fn retrive_meta(&self) -> Option<(usize, usize)> {
-        if KEY_LEN_BYTES + VAL_LEN_BYTES > self.data.len() {
+    fn retrive_meta(&self) -> Option<(usize, usize, bool)> {
+        if KV_META_BYTES > self.data.len() {
             return None;
         }
         let key_len = self.data[0] as usize;
         let mut val_len_bytes: [u8; VAL_LEN_BYTES] = [0; VAL_LEN_BYTES];
         val_len_bytes[..].copy_from_slice(&self.data[Self::val_len_range()]);
         let val_len = u16::from_le_bytes(val_len_bytes) as usize;
+        let deleted: u8 = self.data[KV_META_BYTES - DELETED_FLAG_BYTES];
 
-        Some((key_len, val_len))
+        Some((key_len, val_len, deleted == 1))
     }
 
     // if none -> data is not valid as a kv entry
     // e.g. not long enough, possible passed in the empty space at the end of a block
-    /// return Option<key, value, lenght of entry = key_len + value_len + meta_len>
-    pub fn retrive_kv(&'a self) -> Option<(&'a [u8], &'a [u8], usize)> {
-        let (key_len, val_len) = self.retrive_meta()?;
-        if key_len + val_len + KEY_LEN_BYTES + VAL_LEN_BYTES > self.data.len() {
+    /// return Option<key, value, deleted, lenght of entry>
+    pub fn retrive_kv(&'a self) -> Option<(&'a [u8], &'a [u8], bool, usize)> {
+        let (key_len, val_len, deleted) = self.retrive_meta()?;
+        if key_len + val_len + KV_META_BYTES > self.data.len() {
             return None;
         }
         let key = &self.data[Self::key_range(key_len)];
         let val = &self.data[Self::val_range(key_len, val_len)];
 
-        Some((key, val, key_len + val_len + KEY_LEN_BYTES + VAL_LEN_BYTES))
+        Some((key, val, deleted, key_len + val_len + KV_META_BYTES))
     }
 }
 
@@ -261,16 +275,21 @@ impl<'a> KVEntryWriter<'a> {
     }
 
     fn key_range(key_len: usize) -> Range<usize> {
-        (KEY_LEN_BYTES + VAL_LEN_BYTES)..(KEY_LEN_BYTES + VAL_LEN_BYTES + key_len)
+        (KV_META_BYTES)..(KV_META_BYTES + key_len)
     }
 
     fn val_range(key_len: usize, val_len: usize) -> Range<usize> {
-        let val_offset = KEY_LEN_BYTES + VAL_LEN_BYTES + key_len;
+        let val_offset = KV_META_BYTES + key_len;
         val_offset..(val_offset + val_len)
     }
 
     // return the populated size
-    pub fn populate_with_key_val(&mut self, key: &[u8], val: &[u8]) -> Result<usize> {
+    pub fn populate_with_key_val(
+        &mut self,
+        key: &[u8],
+        val: &[u8],
+        deleted: bool,
+    ) -> Result<usize> {
         if key.len() > MAX_KEY_LEN {
             bail!("key too long");
         }
@@ -278,13 +297,23 @@ impl<'a> KVEntryWriter<'a> {
             bail!("val too long");
         }
 
+        // populate key len
         self.data[0] = key.len() as u8;
+        // populate key
         self.data[Self::key_range(key.len())].copy_from_slice(key);
-
+        // populate val len
         let val_len_bytes: [u8; VAL_LEN_BYTES] = (val.len() as u16).to_le_bytes();
         self.data[Self::val_len_range()].copy_from_slice(&val_len_bytes);
+        // populate val
         self.data[Self::val_range(key.len(), val.len())].copy_from_slice(val);
-        Ok(KEY_LEN_BYTES + VAL_LEN_BYTES + key.len() + val.len())
+
+        if deleted {
+            self.data[KV_META_BYTES - DELETED_FLAG_BYTES] = 1;
+        } else {
+            self.data[KV_META_BYTES - DELETED_FLAG_BYTES] = 0;
+        }
+
+        Ok(KV_META_BYTES + key.len() + val.len())
     }
 }
 
