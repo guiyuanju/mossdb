@@ -26,7 +26,7 @@ impl Repl {
                     println!("expect a key and a value");
                     return;
                 }
-                self.engine.set(args[0].to_string(), args[1].to_string());
+                self.engine.put(args[0].to_string(), args[1].to_string());
             }
             "get" => {
                 if args.len() != 1 {
@@ -46,9 +46,8 @@ impl Repl {
                 }
                 self.engine.del(args[0]);
             }
-            "dump" => {
-                self.engine.dump();
-            }
+            "dump" => self.engine.dump(),
+            "flush" => self.engine.flush(),
             _ => {}
         }
     }

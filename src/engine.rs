@@ -155,45 +155,11 @@ impl Engine {
     }
 
     // set key value, append to log, udpate hash, grow if neccessary
-    pub fn set(&self, key: String, value: String) {
-        let mut memtable = self.memtable.lock().unwrap();
-
-        memtable.set(key, value);
-
-        if memtable.byte_size() as u64 >= MEMTABLE_MAX_SIZE_BYTES {
-            // replace full memtable with a new one
-            let old_memtable = mem::replace(&mut *memtable, MemTable::new());
-            let old_memtable = Arc::new(old_memtable);
-
-            // install the full memtable to the newest version
-            // use optimistic lock: cmpare and set
-            // reason: full memtable installation is rare compare to read operation
-            // optimistic lock is more performant
-            // and cloning and push cost time when the vector is long
-            // a simple mutex will block read operation for a long time
-            loop {
-                let mut version_ptr = std::ptr::null();
-                // cheap read lock
-                let mut new_version = {
-                    // put version in a block to realease the read lock upon block end
-                    let version = self.version.read().unwrap().clone();
-                    version_ptr = version.as_ref();
-                    (*version).clone()
-                };
-                new_version.imm_memtables.push(old_memtable.clone());
-
-                // write lock with cheap operation
-                let mut guard = self.version.write().unwrap();
-                let current_version = Arc::clone(&guard);
-                if std::ptr::eq(current_version.as_ref(), version_ptr) {
-                    *guard = Arc::new(new_version);
-                    break;
-                }
-            }
-
-            // notify flush thread
-            self.flush_tx.send(old_memtable.clone());
-        }
+    pub fn put(&self, key: String, value: String) {
+        self.flush_if(move |m: &mut MemTable| {
+            m.set(key, value);
+            m.byte_size() as u64 >= MEMTABLE_MAX_SIZE_BYTES
+        });
     }
 
     // get value, check hash to find offset in log
@@ -224,6 +190,55 @@ impl Engine {
     // delete key, the tombstone value is an empty byte array
     pub fn del(&self, key: &str) {
         todo!()
+    }
+
+    /// flush immedieately to disk
+    pub fn flush(&self) {
+        self.flush_if(|_| true);
+    }
+
+    /// flush current memtable immediately to disk if predicate is true
+    /// inside a mutext lock, so that flushing the correct one
+    fn flush_if<F>(&self, predicate: F)
+    where
+        F: FnOnce(&mut MemTable) -> bool,
+    {
+        let mut memtable = self.memtable.lock().unwrap();
+        if predicate(&mut memtable) {
+            // replace full memtable with a new one
+            let old_memtable = mem::replace(&mut *memtable, MemTable::new());
+            let old_memtable = Arc::new(old_memtable);
+            drop(memtable);
+
+            // install the full memtable to the newest version
+            // use optimistic lock: cmpare and set
+            // reason: full memtable installation is rare compare to read operation
+            // optimistic lock is more performant
+            // and cloning and push cost time when the vector is long
+            // a simple mutex will block read operation for a long time
+            loop {
+                let mut version_ptr = std::ptr::null();
+                // cheap read lock
+                let mut new_version = {
+                    // put version in a block to realease the read lock upon block end
+                    let version = self.version.read().unwrap().clone();
+                    version_ptr = version.as_ref();
+                    (*version).clone()
+                };
+                new_version.imm_memtables.push(old_memtable.clone());
+
+                // write lock with cheap operation
+                let mut guard = self.version.write().unwrap();
+                let current_version = Arc::clone(&guard);
+                if std::ptr::eq(current_version.as_ref(), version_ptr) {
+                    *guard = Arc::new(new_version);
+                    break;
+                }
+            }
+
+            // notify flush thread
+            let _ = self.flush_tx.send(old_memtable.clone());
+        }
     }
 
     pub fn dump(&self) {
