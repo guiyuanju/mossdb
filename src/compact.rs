@@ -113,7 +113,7 @@ impl Compact {
     }
 
     // TODO: improve this method, too many arc clone
-    // current strategy: get the smallest two adjavent sstables
+    /// current strategy: get the smallest two adjavent sstables, newest at the start
     fn get_sstables_to_compact(&self) -> Vec<Arc<SSTable>> {
         let guard = self.engine.version.read().unwrap();
         let version = Arc::clone(&guard);
@@ -122,52 +122,40 @@ impl Compact {
             return vec![];
         }
 
+        // get the smallest size sstable
         let mut sorted = version
             .sstables
             .iter()
             .enumerate()
-            .map(|(idx, s)| (idx, s.filename.clone(), s.file_size, Arc::clone(s)))
-            .collect::<Vec<(usize, String, u64, Arc<SSTable>)>>();
-        sorted.sort_by_cached_key(|(_, _, size, _)| *size);
+            .map(|(idx, s)| (idx, s.file_size))
+            .collect::<Vec<(usize, u64)>>();
+        sorted.sort_by_cached_key(|(_, size)| *size);
+        let (idx, _) = &sorted[0];
 
-        let (idx, filename, size, sstable) = &sorted[0];
-
-        // add the smaller neighbor of the smallest one
-        let mut neighbors = vec![(*idx, filename, *size, Arc::clone(sstable))];
+        // get the smaller ajacent sstable
         if *idx == 0 {
-            neighbors.push((
-                1,
-                &version.sstables[1].filename,
-                version.sstables[1].file_size,
+            return vec![
                 Arc::clone(&version.sstables[1]),
-            ));
-        } else if *idx == sorted.len() - 1 {
-            let idx = sorted.len() - 2;
-            neighbors.push((
-                idx,
-                &version.sstables[idx].filename,
-                version.sstables[idx].file_size,
-                Arc::clone(&version.sstables[idx]),
-            ));
-        } else {
-            let prev = idx - 1;
-            let next = idx + 1;
-            neighbors.push((
-                prev,
-                &version.sstables[prev].filename,
-                version.sstables[prev].file_size,
-                Arc::clone(&version.sstables[prev]),
-            ));
-            neighbors.push((
-                next,
-                &version.sstables[next].filename,
-                version.sstables[next].file_size,
-                Arc::clone(&version.sstables[next]),
-            ));
+                Arc::clone(&version.sstables[0]),
+            ];
         }
-        neighbors.sort_by_key(|(_, _, size, _)| *size);
-
-        vec![Arc::clone(&neighbors[0].3), Arc::clone(&neighbors[1].3)]
+        if *idx == version.sstables.len() - 1 {
+            return vec![
+                Arc::clone(&version.sstables[*idx]),
+                Arc::clone(&version.sstables[*idx - 1]),
+            ];
+        }
+        if version.sstables[*idx - 1].file_size < version.sstables[*idx + 1].file_size {
+            return vec![
+                Arc::clone(&version.sstables[*idx]),
+                Arc::clone(&version.sstables[*idx - 1]),
+            ];
+        } else {
+            return vec![
+                Arc::clone(&version.sstables[*idx + 1]),
+                Arc::clone(&version.sstables[*idx]),
+            ];
+        }
     }
 
     fn compact(&self, sstables: Vec<Arc<SSTable>>) -> Result<String> {
@@ -186,6 +174,7 @@ struct SSTableMergeIterator {
     offset_in_block: Vec<usize>,
     heads: Vec<Option<(String, String)>>,
     loaded: bool,
+    prev: Option<String>, // previous outputed key, used to skip value that should be discarded
 }
 
 impl Iterator for SSTableMergeIterator {
@@ -201,7 +190,46 @@ impl Iterator for SSTableMergeIterator {
             self.loaded = true;
         }
 
-        // find the smallest, retrieve next
+        let mut cur = self.retrieve_smallest()?;
+        if self.prev.is_none() || !self.prev.as_ref().unwrap().eq(&cur.0) {
+            self.prev = Some(cur.0.clone());
+            return Some(cur);
+        }
+        while self.prev.as_ref().unwrap().eq(&cur.0) {
+            cur = self.retrieve_smallest()?;
+        }
+        self.prev = Some(cur.0.clone());
+        return Some(cur);
+    }
+}
+
+impl SSTableMergeIterator {
+    // newest sstable should at the start
+    pub fn new(sstables: Vec<Arc<SSTable>>) -> Result<Self> {
+        let mut files = vec![];
+        for s in &sstables {
+            let file = OpenOptions::new().read(true).open(&s.filename)?;
+            files.push(file);
+        }
+        let len = files.len();
+
+        let sparseindex: Vec<SparseIndex> =
+            sstables.iter().map(|s| s.sparse_index.clone()).collect();
+
+        Ok(Self {
+            files,
+            blocks: vec![Block::new(); len],
+            offset_in_block: vec![0; len],
+            heads: vec![None; len],
+            loaded: false,
+            sparseindex,
+            block_index: vec![0; len],
+            prev: None,
+        })
+    }
+
+    // find the smallest, retrieve next
+    pub fn retrieve_smallest(&mut self) -> Option<(String, String)> {
         let min_idx = self
             .heads
             .iter()
@@ -223,32 +251,7 @@ impl Iterator for SSTableMergeIterator {
         // get the smallest, and retrieve the next element for it
         let res = self.heads[min_idx].as_ref().unwrap().to_owned();
         self.load_next_kv_for_block(min_idx).unwrap();
-
         Some(res)
-    }
-}
-
-impl SSTableMergeIterator {
-    pub fn new(sstables: Vec<Arc<SSTable>>) -> Result<Self> {
-        let mut files = vec![];
-        for s in &sstables {
-            let file = OpenOptions::new().read(true).open(&s.filename)?;
-            files.push(file);
-        }
-        let len = files.len();
-
-        let sparseindex: Vec<SparseIndex> =
-            sstables.iter().map(|s| s.sparse_index.clone()).collect();
-
-        Ok(Self {
-            files,
-            blocks: vec![Block::new(); len],
-            offset_in_block: vec![0; len],
-            heads: vec![None; len],
-            loaded: false,
-            sparseindex,
-            block_index: vec![0; len],
-        })
     }
 
     // Err => file format error
