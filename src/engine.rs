@@ -66,6 +66,7 @@ impl Engine {
         Ok(engine)
     }
 
+    // TODO: may fail during writing metadata file, need to store the order in the sstable files too
     // previous_version: compare and swap, used to compare
     pub fn install_new_version(
         &self,
@@ -117,13 +118,11 @@ impl Engine {
             let path = entry?.path();
             if path.is_file() && path.extension().is_some_and(|ext| ext == "log") {
                 let filename = path.file_name().unwrap().to_string_lossy().to_string();
-                info!("listing log file {}", filename);
                 if filenames.contains(&filename) {
                     info!("recognizing {} in newest version", filename);
                     logs.push(path);
                 } else {
-                    info!("{} is in newest version, deleted", filename);
-                    remove_file(path).unwrap();
+                    info!("{} is not in newest version, please fix it", filename);
                 }
             }
         }

@@ -18,6 +18,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
+use log::error;
 use log::info;
 
 #[derive(Debug)]
@@ -30,11 +31,10 @@ pub struct SSTable {
 
 impl Drop for SSTable {
     fn drop(&mut self) {
-        info!(
-            "removeing sstable files {} in drop, res: {:?}",
-            self.filename,
-            fs::remove_file(&self.filename)
-        );
+        match fs::remove_file(&self.filename) {
+            Err(err) => error!("failed to remove sstable file {}: {:?}", self.filename, err),
+            Ok(_) => info!("removed sstable file {}", self.filename),
+        }
     }
 }
 
