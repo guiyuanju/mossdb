@@ -2,11 +2,17 @@
 
 <img width="100" alt="mossdb" src="./resources/logo.png" />
 
+A LSN-based key-value storage library, aim to be used as an embeded storage engine, support multiple threaded read and write, provides high write throughput, by utilizing disk's high speed sequential write speed.
+
+_This project is built for learning, not intended for used in production._
+
 ## Usage
 
 ```rust
 // initialize the Engine
-// with current path as the log storage, memtable max 64 MB before flush, max 10 sstable log files
+// with current path as the log storage
+// memtable max 64 MB before flush
+// max 10 sstable log files
 let e = Engine::new("./", 64 * 1024 * 1024, 10).unwrap();
 
 // put a key value
@@ -28,25 +34,25 @@ assert!(res.is_err_and(|e| e == MossError::KeyNotFound));
 
 ![](./resources/arch.png)
 
-**engine**: interface, providing put, get, del method, owns a memtable and current version
+**Engine**: interface, providing put, get, del method, owns a memtable and current version
 
-**memtable**: read and write
+**Memtable**: read and write
 
-**version**: immutable snapshot of a consistent system status, owns immutable memtables and sstables
+**Version**: immutable snapshot of a consistent system status, owns immutable memtables and sstables
 
-**sstable**: representation of disk log files, has sparse index and cached reader
+**Sstable**: representation of disk log files, has sparse index and cached reader
 
-**sparse index**: key -> block start offset
+**Sparse index**: key -> block start offset
 
-**cached reader**: cache recent accessed block
+**Cached reader**: cache recent accessed block
 
-**flush thread**: flush immutable memtable to sstable files, generate new version
+**Flush thread**: flush immutable memtable to sstable files, generate new version
 
-**ompact thread**: compact sstable files, generate new version
+**Compact thread**: compact sstable files, generate new version
 
-**sstable files**: block based, format: sparse index start, data block start, sparse index blocks, data blocks
+**Sstable files**: block based, format: sparse index start, data block start, sparse index blocks, data blocks
 
-**metadata file**: persist the order of sstable files
+**Metadata file**: persist the order of sstable files
 
 ## Detail
 
