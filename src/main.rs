@@ -1,29 +1,6 @@
-use crate::repl::Repl;
-use std::env;
-use std::io;
+use std::{env, io};
 
-mod common;
-mod compact;
-mod engine;
-mod flush;
-mod layout;
-mod memtable;
-mod reader;
-mod repl;
-mod sparseindex;
-mod sstable;
-mod versionset;
-mod writer;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_main() -> io::Result<()> {
-        todo!()
-    }
-}
+use mossdb::repl::Repl;
 
 fn main() -> io::Result<()> {
     env_logger::init();
