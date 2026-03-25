@@ -42,3 +42,9 @@
 - [x] compaction thread
 - [ ] write ahead log
 - [ ] test
+
+## Integration Test
+
+```sh
+cargo test -v --test integration_test -- --show-output --test-threads=1
+```
