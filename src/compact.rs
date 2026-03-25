@@ -30,7 +30,7 @@ impl Compact {
         loop {
             let _ = self.rx.recv();
             info!("compact thread received trigger message, try to find and compact files");
-            while self.get_sstable_size() > 4 {
+            while self.get_sstable_size() > self.engine.sstable_compact_limit {
                 let sstables = self.get_sstables_to_compact();
                 if sstables.len() < 2 {
                     info!("less than 2 sstables for compaction found, skip");
