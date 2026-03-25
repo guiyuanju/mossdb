@@ -64,7 +64,7 @@ Version contains a consistent snapshot of system state, including an immutable m
 
 Flush thread and compact thread read the current version and generate a new version from it, then use an optimistic lock (compare and set) to try installing the newest version.
 
-Since version installation is relatively rare compared to memtable push, an optimistic lock is performant enough.
+Since version installation is relatively rare compared to user read and write, an optimistic lock is performant enough.
 
 ### Read path
 
