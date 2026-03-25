@@ -7,6 +7,7 @@ edition = "2024"
 log = "0.4"
 env_logger = "0.10"
 anyhow = "1.0.100"
+thiserror = "2.0.18"
 
 [dependencies.uuid]
 version = "1.22.0"
