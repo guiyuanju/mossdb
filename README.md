@@ -6,25 +6,30 @@
 
 ![](./resources/arch.png)
 
-- engine: interface, providing put, get, del method
-  - memtable: read and write
-  - version: immutable snapshot of a consistent system status
-    - immutable memtables: memtables wait to be flushed
-    - sstables: representation of disk log files
-      - sparse index: key -> block start offset
-      - cached reader: cache recent accessed block
-- flush thread: flush immutable memtable to sstable files, generate new version
-- compact thread: compact sstable files, generate new version
+**engine**: interface, providing put, get, del method, owns a memtable and current version
 
-- sstable files
-  - block based
-  - format: sparse index start, data block start, sparse index blocks, data blocks
+**memtable**: read and write
 
-- metadata file: persist the order of sstable files
+**version**: immutable snapshot of a consistent system status, owns immutable memtables and sstables
+
+**sstable**: representation of disk log files, has sparse index and cached reader
+
+**sparse index**: key -> block start offset
+
+**cached reader**: cache recent accessed block
+
+**flush thread**: flush immutable memtable to sstable files, generate new version
+
+**ompact thread**: compact sstable files, generate new version
+
+**sstable files**: block based, format: sparse index start, data block start, sparse index blocks, data blocks
+
+**metadata file**: persist the order of sstable files
 
 ## Detail
 
-**Version**
+### Version
+
 ![](./resources/version.png)
 
 Version contains a consistent snapshot of system status, including a immutable memtabe queue and a sstable queue.
@@ -33,18 +38,25 @@ Flush thread and compact thread read current version and generate a new version 
 
 Since the version installation is relatively rare compared to the memtable push, an optimistic lock is performant enough.
 
-**Read path**
+### Read path
+
 ![](./resources/read.png)
-**Write path**
+
+### Write path
+
 ![](./resources/write.png)
 
-## Multi-threading Performance
+### Multi-threading Performance
 
 The hot memtabe is currently guarded by a Mutex, which means read and write need to first grab the lock, if there are multiple user thread that read and write concurrently, it may decrease the performance.
 
 For flush and compact thread, as mentioned before, the optimistic lock is performant enough.
 
 So the best use case is to use a small number of read write thread for a better performance.
+
+### Arc and File Deletion
+
+Each SSTable represent a file on disk, a SSTable is wrapped with an `Arc`, it maybe shared by some version, flush thread, compact thread or user read, when the reference count decrease to zero, which means the fie is no longer needed, the file will be deleted.
 
 ## Usage
 
