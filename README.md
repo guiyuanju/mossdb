@@ -2,7 +2,14 @@
 
 <img width="100" alt="mossdb" src="./resources/logo.png" />
 
+Architecture
 ![](./resources/arch.png)
+Version
+![](./resources/version.png)
+Read path
+![](./resources/read.png)
+Write path
+![](./resources/write.png)
 
 - [ ] update the final architechture
 - [ ] the current arch
