@@ -3,7 +3,10 @@ use std::{
     sync::Arc,
 };
 
-use crate::engine::Engine;
+use crate::{
+    engine::Engine,
+    layout::{MEMTABLE_FLUSH_LIMIT, SSTABLE_COMPACT_LIMIT},
+};
 use log::error;
 
 pub struct Repl {
@@ -13,7 +16,7 @@ pub struct Repl {
 impl Repl {
     pub fn new() -> Self {
         Self {
-            engine: Engine::new("./").unwrap(),
+            engine: Engine::new("./", MEMTABLE_FLUSH_LIMIT, SSTABLE_COMPACT_LIMIT).unwrap(),
         }
     }
 
@@ -24,7 +27,7 @@ impl Repl {
                     println!("expect a key and a value");
                     return;
                 }
-                self.engine.put(args[0].to_string(), args[1].to_string());
+                self.engine.put(args[0], args[1]);
             }
             "get" => {
                 if args.len() != 1 {

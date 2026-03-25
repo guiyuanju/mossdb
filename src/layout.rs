@@ -8,7 +8,8 @@ use anyhow::{Result, bail};
 //  key length | key value | val length | val value ...
 pub const LOG_FILE_EXT: &str = "log";
 pub const BLOCK_SIZE_BYTES: usize = 16 * 1024; // 16 KB
-pub const MEMTABLE_MAX_SIZE_BYTES: u64 = 16;
+pub const MEMTABLE_FLUSH_LIMIT: usize = 64 * 1024 * 1024; // 64 MB
+pub const SSTABLE_COMPACT_LIMIT: usize = 4;
 // pub const MEMTABLE_MAX_SIZE_BYTES: usize = 64 * 1024 * 1024; // 64 MB
 // pub const BLOCK_COUNT: usize = MEMTABLE_MAX_SIZE_BYTES / BLOCK_SIZE_BYTES; // 4096 blocks in one level 0 log file
 

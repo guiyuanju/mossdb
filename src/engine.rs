@@ -13,8 +13,8 @@ use std::{
 };
 
 use crate::{
-    compact::Compact, flush::Flush, layout::MEMTABLE_MAX_SIZE_BYTES, memtable::MemTable,
-    sstable::SSTable, versionset::Version,
+    common::MossError, compact::Compact, flush::Flush, memtable::MemTable, sstable::SSTable,
+    versionset::Version,
 };
 
 const METADATA_FILE: &str = "mossdb_metadata";
@@ -24,11 +24,17 @@ pub struct Engine {
     pub version: RwLock<Arc<Version>>,
     pub memtable: Mutex<MemTable>, // TODO: use concurrent data structure for better performance
     pub sstables_dir: String,
+    pub memtable_flush_limit: usize, // trigger flush when memtable cross this number
+    pub sstable_compact_limit: usize, // trigger compact above the limit, will keep files under this number
     flush_tx: mpsc::Sender<Arc<MemTable>>,
 }
 
 impl Engine {
-    pub fn new(path: &str) -> Result<Arc<Engine>> {
+    pub fn new(
+        path: &str,
+        memtable_flush_limit: usize,
+        sstable_compact_limit: usize,
+    ) -> Result<Arc<Engine>> {
         let (flush_tx, flush_rx) = mpsc::channel();
         let (compact_tx, compact_rx) = mpsc::channel();
 
@@ -36,6 +42,8 @@ impl Engine {
             version: RwLock::new(Arc::new(Version::new())),
             memtable: Mutex::new(MemTable::new()),
             sstables_dir: path.to_string(),
+            memtable_flush_limit,
+            sstable_compact_limit,
             flush_tx,
         };
 
@@ -125,11 +133,11 @@ impl Engine {
     }
 
     fn read_from_metadata_file(&self) -> Vec<String> {
-        let res = read_to_string(METADATA_FILE).unwrap();
+        let res = read_to_string(METADATA_FILE).unwrap_or_default();
         res.lines().map(|s| s.to_string()).collect::<Vec<String>>()
     }
 
-    pub fn open_log_dir(&mut self, _: &str) -> Result<()> {
+    fn open_log_dir(&mut self, _: &str) -> Result<()> {
         let logs = self.list_sorted_log_files()?;
 
         let mut sstables: Vec<Arc<SSTable>> = vec![];
@@ -147,19 +155,19 @@ impl Engine {
     }
 
     // set key value, append to log, udpate hash, grow if neccessary
-    pub fn put(&self, key: String, value: String) {
+    pub fn put(&self, key: &str, value: &str) {
         self.flush_if(move |m: &mut MemTable| {
-            m.put(key, value);
-            m.byte_size() as u64 >= MEMTABLE_MAX_SIZE_BYTES
+            m.put(key.to_string(), value.to_string());
+            m.byte_size() >= self.memtable_flush_limit
         });
     }
 
     // get value, check hash to find offset in log
-    pub fn get(&self, key: &str) -> Result<String> {
+    pub fn get(&self, key: &str) -> std::result::Result<String, MossError> {
         let memtable = self.memtable.lock().unwrap();
         if let Some((value, deleted)) = memtable.get(key) {
             if deleted {
-                bail!("key deleted");
+                return Err(MossError::KeyNotFound);
             }
             return Ok(value);
         }
@@ -170,7 +178,7 @@ impl Engine {
         for m in version.imm_memtables.iter().rev() {
             if let Some((value, deleted)) = m.get(key) {
                 if deleted {
-                    bail!("key deleted");
+                    return Err(MossError::KeyNotFound);
                 }
                 return Ok(value);
             }
@@ -179,20 +187,20 @@ impl Engine {
         for t in version.sstables.iter().rev() {
             if let Ok((val, deleted)) = t.get(key) {
                 if deleted {
-                    bail!("key deleted");
+                    return Err(MossError::KeyNotFound);
                 }
                 return Ok(val);
             }
         }
 
-        Err(anyhow!("key not found"))
+        return Err(MossError::KeyNotFound);
     }
 
     // delete key, the tombstone value is an empty byte array
     pub fn del(&self, key: &str) {
         self.flush_if(move |m: &mut MemTable| {
             m.del(key.to_string());
-            m.byte_size() as u64 >= MEMTABLE_MAX_SIZE_BYTES
+            m.byte_size() >= self.memtable_flush_limit
         });
     }
 
