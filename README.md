@@ -2,6 +2,28 @@
 
 <img width="100" alt="mossdb" src="./resources/logo.png" />
 
+## Usage
+
+```rust
+// initialize the Engine
+// with current path as the log storage, memtable max 64 MB before flush, max 10 sstable log files
+let e = Engine::new("./", 64 * 1024 * 1024, 10).unwrap();
+
+// put a key value
+e.put("1", "1");
+
+// get a key
+let res = e.get("1").unwrap();
+assert_eq!("1", res);
+
+// delete a key
+e.del("1");
+
+// get a non-exist key returns an Err
+let res = e.get("1");
+assert!(res.is_err_and(|e| e == MossError::KeyNotFound));
+```
+
 ## Architecture
 
 ![](./resources/arch.png)
@@ -57,28 +79,6 @@ So the best use case is to use a small number of read write thread for a better 
 ### Arc and File Deletion
 
 Each SSTable represent a file on disk, a SSTable is wrapped with an `Arc`, it maybe shared by some version, flush thread, compact thread or user read, when the reference count decrease to zero, which means the fie is no longer needed, the file will be deleted.
-
-## Usage
-
-```rust
-// initialize the Engine
-// with current path as the log storage, memtable max 64 MB before flush, max 10 sstable log files
-let e = Engine::new("./", 64 * 1024 * 1024, 10).unwrap();
-
-// put a key value
-e.put("1", "1");
-
-// get a key
-let res = e.get("1").unwrap();
-assert_eq!("1", res);
-
-// delete a key
-e.del("1");
-
-// get a non-exist key returns an Err
-let res = e.get("1");
-assert!(res.is_err_and(|e| e == MossError::KeyNotFound));
-```
 
 ## Integration Test
 
